@@ -1,7 +1,7 @@
 
 -module(philosopher).
 -export([main/1]).
-
+-define(TIMEOUT, 2000).
 
 %main driver of application
 main(Params) ->
@@ -22,20 +22,54 @@ main(Params) ->
 
 %handles all messages and does so recursively
 handleMessage(State, NumForksNeeded, Forks, Neighbours) ->
-
         case State of
                 joining     -> joinState(NumForksNeeded, Forks, Neighbours);
                 thinking    -> thinkingState(NumForksNeeded, Forks, Neighbours);
                 hungry      -> hungryState(NumForksNeeded, Forks, Neighbours);
                 eating      -> eatingState(NumForksNeeded, Forks, Neighbours);
                 leaving     -> leavingState(NumForksNeeded, Forks, Neighbours);
-                gone        -> goneState(NumForksNeeded, Forks, Neighbours)
-                _Else   -> io:format("Error parsing state. ~n")
+                gone        -> goneState(NumForksNeeded, Forks, Neighbours);
+                _Else       -> io:format("Error parsing state. ~n")
         end.
 
-joinState(NumForksNeeded, Forks, Neighbours) -> io:format("got to join").
+joinState(NumForksNeeded, Forks, Neighbours) -> 
+        io:format("in joining!"),
+        io:format(Neighbours),
+        Boolval = sendIdentifyMessage(Neighbours, 1),
+        if 
+                Boolval == true -> 
+                        io:format("go into thinkin!"), 
+                        handleMessage(thinking, NumForksNeeded, Forks, Neighbours);
+                true -> io:format("nope, someone is higher than me!"), 
+                        receive
+                                {ClientPid, identifyRequest} -> ClientPid ! {self(), identifyResponse, joining}
+                        after ?TIMEOUT -> io:format("Timed out waiting for reply!\n")
+                        end,
+                        joinState(NumForksNeeded, Forks, Neighbours)
+        end.
 
-thinkingState(NumForksNeeded, Forks, Neighbours) -> io:format("got to thinking").
+sendIdentifyMessage(Neighbours, CurrCount) ->
+        io:format("in sendin"),
+        if 
+                CurrCount =< length(Neighbours) -> 
+                        ClientPid = lists:nth(Neighbours, CurrCount), 
+                        ClientPid ! {self(), identifyRequest},
+                        receive
+                                {ClientPid, identifyResponse, joining} -> 
+                                        if
+                                                ClientPid < self() -> false;
+                                                true -> sendIdentifyMessage(Neighbours, CurrCount+1)
+                                        end;
+                                {ClientPid, identifyResponse, _} -> sendIdentifyMessage(Neighbours, CurrCount+1)       
+                        end;
+                true -> true
+        end.
+
+thinkingState(NumForksNeeded, Forks, Neighbours) -> 
+        io:format("got to thinking"),
+        receive
+                {ClientPid, identifyRequest} -> ClientPid ! {self(), identifyResponse, thinking}, thinkingState(NumForksNeeded, Forks, Neighbours)
+        end.
 
 hungryState(NumForksNeeded, Forks, Neighbours) -> io:format("got to hungry").
 
