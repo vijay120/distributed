@@ -43,7 +43,7 @@ main(Params) ->
 joinState(NumForksNeeded, Forks, Neighbours) -> 
 		io:format("in joining! ~n"),
 		io:format("Neighbours are ~p~n", [Neighbours]),
-		CanStartThinking = sendIdentifyMessage(Neighbours, 1),
+		CanStartThinking = sendIdentifyMessage(Forks, Neighbours, 1),
 		if 
 				CanStartThinking == true -> 
 						io:format("go into thinkin! ~n"), 
@@ -61,7 +61,7 @@ joinState(NumForksNeeded, Forks, Neighbours) ->
 % sender's and there are joining neighbours, then we know we can't join yet.
 % if it's greater than all its neighbors, stay joining. 
 % if it's the only joining node, it can become thinking.
-sendIdentifyMessage(Neighbours, CurrCount) ->
+sendIdentifyMessage(Forks, Neighbours, CurrCount) ->
 		io:format("in sending ~n"),
 		if 
 				CurrCount =< length(Neighbours) -> 
@@ -73,35 +73,56 @@ sendIdentifyMessage(Neighbours, CurrCount) ->
 								{ClientPid, identifyResponse, joining} -> 
 										if
 												ClientPid < self() -> false;
-												true -> sendIdentifyMessage(Neighbours, CurrCount+1)
-										end;
-								{ClientPid, identifyResponse, _} -> sendIdentifyMessage(Neighbours, CurrCount+1)       
+												true -> sendIdentifyMessage(Forks, Neighbours, CurrCount+1)
+										end; % otherwise if it's hungry, thinking, or eating create a fork with it
+								{ClientPid, identifyResponse, thinking} -> createFork(Forks, Neighbours, ClientPid),
+																													 sendIdentifyMessage(Forks, Neighbours, CurrCount+1);
+								{ClientPid, identifyResponse, hungry}   -> createFork(Forks, Neighbours, ClientPid),
+																													 sendIdentifyMessage(Forks, Neighbours, CurrCount+1);
+								{ClientPid, identifyResponse, eating}   -> createFork(Forks, Neighbours, ClientPid),
+																												   sendIdentifyMessage(Forks, Neighbours, CurrCount+1);
+								{_, identifyResponse, _} -> sendIdentifyMessage(Forks, Neighbours, CurrCount+1)       
 						end;
 				true -> true
 		end.
 
-% listens for any identifyRequests, responds with its state. Repeats.
+% Check if the fork already exists with that neighbor. If not, create it by
+% sending appropriate message.
+createFork(Forks, Neighbours, ClientPid) ->
+		IsNeighbourInFork = checkNeighbourInFork(Forks, Neighbours),
+		if IsNeighbourInFork == false ->
+			ClientPid ! {self(), createFork}
+		end.
+
+% listens for messages, responds appropriately. Repeats.
 thinkingState(NumForksNeeded, Forks, Neighbours) -> 
 		io:format("got to thinking ~n"),
 		receive
 				{ClientPid, identifyRequest} -> io:format("Identifying self as thinking~n"),
 																				ClientPid ! {self(), identifyResponse, thinking},
 				 																thinkingState(NumForksNeeded, Forks, Neighbours);
-				{_, _, become_hungry} -> io:format("Received message to become hungry!"),
-																	hungryState(NumForksNeeded, Forks, Neighbours);
+				{ClientPid, createFork} -> NewFork = {node(self()), node(ClientPid), true},
+																	 thinkingState(NumForksNeeded+1, [NewFork|Forks], [node(ClientPid)|Neighbours]);
+																	 % neighbours are node names, so we have to convert the pid to that
+				{ClientPid, Ref, become_hungry} -> io:format("Received message to become hungry!"),
+																	hungryState(ClientPid, Ref, NumForksNeeded, Forks, Neighbours);
 				{ClientPid, Ref, leave} -> leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
 				Message -> io:format("Couldn't interpret message ~p~n", [Message])
 		end.
 
 % If we have all the forks, go to eating. If we don't, request and wait for
 % each in turn. Once we have all, go to eating.
-hungryState(NumForksNeeded, Forks, Neighbours) -> io:format("got to hungry"),
+
+% TODO: Handle receiving fork requests. If the fork is clean then keep it,
+% if dirty, send it on any incoming requests.
+
+hungryState(ClientPid, Ref, NumForksNeeded, Forks, Neighbours) -> io:format("got to hungry"),
 		if
 			length(Forks) == NumForksNeeded ->
-				eatingState(NumForksNeeded, Forks, Neighbours);
+				eatingState(ClientPid, Ref, NumForksNeeded, Forks, Neighbours);
 			true -> % request the forks we don't have.
 				AllForks = sendForkRequest(Forks, Neighbours),
-				eatingState(NumForksNeeded, AllForks, Neighbours)
+				eatingState(NumForksNeeded, AllForks, Neighbours, ClientPid, Ref)
 		end.
 
 % repeatedly checks a neighbour to see if we have his fork.
@@ -146,14 +167,28 @@ checkNeighbourInFork(Forks, Neighbour) ->
 				true
 			end.
 
-eatingState(NumForksNeeded, Forks, Neighbours) -> io:format("got to eating").
+% Sends message to controller that made it hungry saying we are now eating.
+% Then waits for a stop_eating request or an identifyRequest.
+eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to eating"),
+		Forks = lists:map(fun(X) -> {element(1, X), element(2, X), false} end, Forks), % dirty forks
+		{ClientPid, Ref} ! {make_ref(), eating}, % sent to controller that transitioned hungry
+		receive
+			{ReceiverClientPid, identifyRequest} -> io:format("Identifying self as hungry~n"),
+																			ReceiverClientPid ! {self(), identifyResponse, eating},
+																			eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
+			{_, _, stop_eating} -> io:format("No longer hungry~n"),
+																			thinkingState(NumForksNeeded, Forks, Neighbours)
+		end.
 
 % NOTE: This requires the extra parameters ClientPid and Ref, as we must send
 % 			a message to the controller that sent its leave message, with matching refs,
 %				once we go to gone.
-leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to leaving").
+leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to leaving"),
+		% TODO: DO THINGS
+		goneState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref).
 
 % ClientPid and Ref required to send gone message back to controller that sent
 % leaving message.
 goneState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to gone"),
-										ClientPid ! {Ref, gone}.
+										ClientPid ! {Ref, gone},
+										goneState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref).
