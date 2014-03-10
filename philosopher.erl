@@ -46,6 +46,8 @@ main(Params) ->
 % Tells hungry, thinking, or eating nodes to create forks with it.
 % Otherwise, it will join the network once it has the lowest pid of its joining
 % neighbours.
+
+% TODO: We need to update numforksneeded when we sendCreateFork()
 joinState(NumForksNeeded, Forks, Neighbours) -> 
 		io:format("in joining! ~n"),
 		io:format("Neighbours are ~p~n", [Neighbours]),
