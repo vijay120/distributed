@@ -10,21 +10,22 @@
 
 %main driver of application
 main(Params) ->
-		try
+		% try
 				%set up network connections
 				_ = os:cmd("epmd -daemon"),
 				Reg_name = hd(Params),
-				Neighbours = tl(Params), % taken as list of neighbours
+				Neighbours = lists:map(fun(X) -> list_to_atom(X) end, tl(Params)), 
+				% taken as list of neighbours, converted to atoms
 				io:format("Neighbours are ~p~n", [Neighbours]),
 				net_kernel:start([list_to_atom(Reg_name), shortnames]),
 				register(philosopher, self()),
 				io:format("Registered as ~p at node ~p, currently joining. ~p~n",
 								  [philosopher, node(), now()]),
-				joinState(0, [], Neighbours)
+				joinState(length(Neighbours), [], Neighbours),
 				% handleMessage(joining, 0, [], Neighbours)
-		catch
-				_:_ -> io:format("Error parsing command line parameters.~n")
-		end,
+		%catch
+		%		_:_ -> io:format("Error parsing command line parameters.~n")
+		%end,
 		halt().
 
 % %handles all messages and does so recursively
@@ -73,7 +74,7 @@ sendIdentifyMessage(Forks, Neighbours, CurrCount) ->
 		io:format("in sending ~n"),
 		if 
 				CurrCount =< length(Neighbours) -> 
-						ClientNodeName = list_to_atom(lists:nth(CurrCount, Neighbours)), 
+						ClientNodeName = lists:nth(CurrCount, Neighbours), 
 						io:format("before"),
 						{philosopher, ClientNodeName} ! {self(), identifyRequest},
 						io:format("after"),
@@ -128,6 +129,8 @@ thinkingState(NumForksNeeded, Forks, Neighbours) ->
 				{ClientPid, Ref, become_hungry} -> io:format("Received message to become hungry!~n"),
 																	hungryState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
 				{ClientPid, Ref, leave} -> leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
+				{ClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ClientPid)]);
+																% TODO: Actually delete the fork with said neighbour.
 				Message -> io:format("Couldn't interpret message ~p~n", [Message]) % TODO: REMOVE?
 		end.
 
@@ -149,7 +152,7 @@ createFork(NumForksNeeded, Forks, Neighbours, ClientPid) ->
 % First we listen for any existing messages to identify, create, or request
 % forks from us. We do this first so that we never hold on to a fork that someone
 % else has priority on.
-hungryState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to hungry"),
+hungryState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to hungry~n"),
 		receive
 			{ReceiverClientPid, identifyRequest} -> io:format("Identifying self as hungry~n"),
 																	ReceiverClientPid ! {self(), identifyResponse, hungry},
@@ -201,19 +204,21 @@ sendForkRequest(Forks, Neighbours, ClientPid, Ref) ->
 			true -> % if we need the fork, request it and wait to receive it.
 							% in theory, we should eventually receive it without needing
 							% to worry about timeout or resending the request.
-				FirstNeighbour ! {self(), requestFork},
+				{philosopher, FirstNeighbour} ! {self(), requestFork},
 				receive 
 					{_, sendFork, Fork} -> % got fork
 						io:format("Received fork ~p ~n", [Fork]),
-						sendForkRequest([Fork|Forks], RestNeighbours, ClientPid, Ref);
+						sendForkRequest([Fork|Forks], RestNeighbours, ClientPid, Ref)
 				end
 		end.
 
 % Finds the fork with a given neighbour, returning it or False.
 findFork(Forks, Neighbour) ->
-		case lists:keyfind(Neighbour, 0, Forks) of
+		io:format("In findFork! ~n"),
+		io:format("Current forks and neighbour: ~p ~p~n", [Forks, Neighbour]),
+		case lists:keyfind(Neighbour, 1, Forks) of
 			false ->
-				case lists:keyfind(Neighbour, 1, Forks) of
+				case lists:keyfind(Neighbour, 2, Forks) of
 					false -> false;
 					Fork  -> Fork
 				end;
@@ -233,10 +238,10 @@ checkNeighbourInFork(Forks, Neighbour) ->
 			Forks == [] ->
 				false;
 			true ->
-				case lists:keyfind(Neighbour, 0, Forks) of
+				case lists:keyfind(Neighbour, 1, Forks) of
 					false -> 
 						io:format("keyfinds working?~n"),
-						case lists:keyfind(Neighbour, 1, Forks) of
+						case lists:keyfind(Neighbour, 2, Forks) of
 							false -> 
 								io:format("We should get here?~n"),
 								false;
@@ -250,21 +255,26 @@ checkNeighbourInFork(Forks, Neighbour) ->
 % Sends message to controller that made it hungry saying we are now eating.
 % Then waits for a stop_eating request or an identifyRequest.
 eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to eating~n"),
-		Forks = lists:map(fun(X) -> {element(1, X), element(2, X), false} end, Forks), % dirty forks
+		io:format("Before ~n"),
+		io:format("The forks are: ~p~n", [Forks]),
+		DirtyForks = lists:map(fun(X) -> {element(1, X), element(2, X), false} end, Forks), % dirty forks
+		io:format("After ~n"),
 
 		ClientPid ! {Ref, eating}, % sent to controller that transitioned hungry
 																						 % TODO: currently might be sent more than once.
 		receive
 			{ReceiverClientPid, identifyRequest} -> io:format("Identifying self as eating~n"),
 																			ReceiverClientPid ! {self(), identifyResponse, eating},
-																			eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
+																			eatingState(NumForksNeeded, DirtyForks, Neighbours, ClientPid, Ref);
 			{ReceiverClientPid, createFork} -> % see if we need to create the fork. We could get multiple such requests
 																 [NewNumForksNeeded, NewForks, NewNeighbours] = createFork(NumForksNeeded,
-																 																													 Forks, Neighbours,
+																 																													 DirtyForks, Neighbours,
 																 																													 ReceiverClientPid),
 																 eatingState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
+			{ReceiverClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ReceiverClientPid)]);
+																% TODO: Actually delete the fork with said neighbour.
 			{_, _, stop_eating} -> io:format("No longer hungry~n"),
-																			thinkingState(NumForksNeeded, Forks, Neighbours)
+																			thinkingState(NumForksNeeded, DirtyForks, Neighbours)
 		end.
 
 % NOTE: This requires the extra parameters ClientPid and Ref, as we must send
