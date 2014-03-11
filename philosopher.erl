@@ -206,9 +206,6 @@ sendForkRequest(Forks, Neighbours, ClientPid, Ref) ->
 					{_, sendFork, Fork} -> % got fork
 						io:format("Received fork ~p ~n", [Fork]),
 						sendForkRequest([Fork|Forks], RestNeighbours, ClientPid, Ref);
-					
-					Message -> % TODO: Remove blanket Message. 
-						io:format("Received some other message: ~p~n", [Message])
 				end
 		end.
 
