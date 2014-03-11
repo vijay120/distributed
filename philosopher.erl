@@ -129,8 +129,9 @@ thinkingState(NumForksNeeded, Forks, Neighbours) ->
 				{ClientPid, Ref, become_hungry} -> io:format("Received message to become hungry!~n"),
 																	hungryState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
 				{ClientPid, Ref, leave} -> leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
-				{ClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ClientPid)]);
-																% TODO: Actually delete the fork with said neighbour.
+				{ClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ClientPid)]),
+																[NewNumForksNeeded, NewForks, NewNeighbours] = deleteForkFromPid(NumForksNeeded, Forks, Neighbours, ClientPid),
+																thinkingState(NewNumForksNeeded, NewForks, NewNeighbours);
 				Message -> io:format("Couldn't interpret message ~p~n", [Message]) % TODO: REMOVE?
 		end.
 
@@ -162,6 +163,11 @@ hungryState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got
 															 																													 Forks, Neighbours,
 															 																													 ReceiverClientPid),
 															 hungryState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
+			{ReceiverClientPid, Ref, leave} -> leavingState(NumForksNeeded, Forks, Neighbours, ReceiverClientPid, Ref);
+			{ReceiverClientPid, leaving} ->
+																io:format("Received message that node ~p is leaving ~n", [node(ReceiverClientPid)]),
+																[NewNumForksNeeded, NewForks, NewNeighbours] = deleteForkFromPid(NumForksNeeded, Forks, Neighbours, ReceiverClientPid),
+																hungryState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
 			{ReceiverClientPid, requestFork} -> % someone wants our fork.
 																				% we must give it to them if the fork
 																				% is dirty.
@@ -271,18 +277,38 @@ eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got
 																 																													 DirtyForks, Neighbours,
 																 																													 ReceiverClientPid),
 																 eatingState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
-			{ReceiverClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ReceiverClientPid)]);
-																% TODO: Actually delete the fork with said neighbour.
+			{ReceiverClientPid, ReceiverRef, leave} -> leavingState(NumForksNeeded, Forks, Neighbours, ReceiverClientPid, ReceiverRef);
+			{ReceiverClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ReceiverClientPid)]),
+																[NewNumForksNeeded, NewForks, NewNeighbours] = deleteForkFromPid(NumForksNeeded, Forks, Neighbours, ReceiverClientPid),
+																eatingState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
 			{_, _, stop_eating} -> io:format("No longer hungry~n"),
 																			thinkingState(NumForksNeeded, DirtyForks, Neighbours)
+		end.
+
+% Deletes the fork with clientPid, if it exists. If so, it also decrements
+% numForksNeeded and removes node(ClientPid) from Neighbours.
+deleteForkFromPid(NumForksNeeded, Forks, Neighbours, ClientPid) ->
+	DoWeHaveFork = checkNeighbourInFork(Forks, node(ClientPid)),
+	if
+		 DoWeHaveFork -> % if we have the fork
+			case lists:keyfind(node(ClientPid), 1, Forks) of
+				false -> ForkToDelete = lists:keyfind(node(ClientPid), 2, Forks);
+				Fork ->  ForkToDelete = Fork % one of these two must get it
+			end,
+			NewForks = lists:delete(ForkToDelete, Forks),
+			NewNeighbours = lists:delete(node(ClientPid), Neighbours),
+			[NumForksNeeded-1, NewForks, NewNeighbours];
+		true -> 
+			NewNeighbours = lists:delete(node(ClientPid), Neighbours),
+			[NumForksNeeded-1, Forks, NewNeighbours] % we didn't have fork, just return as is.
 		end.
 
 % NOTE: This requires the extra parameters ClientPid and Ref, as we must send
 % 			a message to the controller that sent its leave message, with matching refs,
 %				once we go to gone.
-leavingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got to leaving~n"),
-		% TODO: DO THINGS
-		goneState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref).
+leavingState(NumForksNeeded, _, Neighbours, ClientPid, Ref) -> io:format("got to leaving~n"),
+		lists:map(fun(X) -> {philosopher, X} ! {self(), leaving} end, Neighbours),
+		goneState(NumForksNeeded, [], Neighbours, ClientPid, Ref).
 
 % ClientPid and Ref required to send gone message back to controller that sent
 % leaving message.
