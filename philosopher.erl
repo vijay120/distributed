@@ -215,6 +215,8 @@ sendForkRequest(Forks, Neighbours, ClientPid, Ref) ->
 					{_, sendFork, Fork} -> % got fork
 						io:format("Received fork ~p ~n", [Fork]),
 						sendForkRequest([Fork|Forks], RestNeighbours, ClientPid, Ref)
+					after ?TIMEOUT ->
+						sendForkRequest(Forks, Neighbours, ClientPid, Ref)
 				end
 		end.
 
@@ -281,6 +283,7 @@ eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref) -> io:format("got
 			{ReceiverClientPid, leaving} -> io:format("Received message that node ~p is leaving ~n", [node(ReceiverClientPid)]),
 																[NewNumForksNeeded, NewForks, NewNeighbours] = deleteForkFromPid(NumForksNeeded, Forks, Neighbours, ReceiverClientPid),
 																eatingState(NewNumForksNeeded, NewForks, NewNeighbours, ClientPid, Ref);
+			{_, requestFork} -> eatingState(NumForksNeeded, Forks, Neighbours, ClientPid, Ref);
 			{_, _, stop_eating} -> io:format("No longer hungry~n"),
 																			thinkingState(NumForksNeeded, DirtyForks, Neighbours)
 		end.

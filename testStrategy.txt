@@ -1,0 +1,39 @@
+Test1: 3 nodes in a line
+
+node1 <-> node2 <-> node3
+
+
+Test2: 3 nodes all connected
+We made all nodes in a triangle. They all start thinking first. We then made
+each hungry in order. Node 1 starts eating, the other two stay hungry. We then
+make node 1 stop eating. Node 2 properly starts eating. We then make node 2 
+stop eating. Node 3 properly starts eating. We then make node 3 stop eating.
+All 3 then leave properly.
+
+
+(enuge93@knuth)6> {philosopher, p1@poinsettia} ! {self(), make_ref(), become_hungry}. 
+{<0.38.0>,#Ref<0.0.0.82>,become_hungry}
+(enuge93@knuth)7> {philosopher, p2@arden} ! {self(), make_ref(), become_hungry}.     
+{<0.38.0>,#Ref<0.0.0.117>,become_hungry}
+(enuge93@knuth)8> {philosopher, p3@cosmos} ! {self(), make_ref(), become_hungry}.    
+{<0.38.0>,#Ref<0.0.0.121>,become_hungry}
+(enuge93@knuth)9> {philosopher, p1@poinsettia} ! {self(), make_ref(), stop_eating}.  
+{<0.38.0>,#Ref<0.0.0.125>,stop_eating}
+(enuge93@knuth)10> {philosopher, p2@arden} ! {self(), make_ref(), stop_eating}.     
+{<0.38.0>,#Ref<0.0.0.129>,stop_eating}
+(enuge93@knuth)11> {philosopher, p3@cosmos} ! {self(), make_ref(), stop_eating}.
+{<0.38.0>,#Ref<0.0.0.133>,stop_eating}
+(enuge93@knuth)15> {philosopher, p3@cosmos} ! {self(), make_ref(), leave}.
+{<0.38.0>,#Ref<0.0.0.133>,leave}
+(enuge93@knuth)14> {philosopher, p2@arden} ! {self(), make_ref(), leave}.  
+{<0.38.0>,#Ref<0.0.0.144>,leave}
+(enuge93@knuth)15> {philosopher, p1@poinsettia} ! {self(), make_ref(), leave}.
+{<0.38.0>,#Ref<0.0.0.148>,leave}
+
+
+Test3: A 4-node ring. 
+
+
+Test4: 5 nodes, 4 of which have one edge to the fifth.
+
+
