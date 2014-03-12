@@ -1,6 +1,40 @@
-Test1: 3 nodes in a line
+Names: Eoin Nugent and Vijay Ramakrishnan
 
-node1 <-> node2 <-> node3
+We tested our code in the following five situations, plus more specific
+things to test each function (or message sending/handling capability)
+as we implemented it. We provide a verbal description of our test
+and then the actual logs. We chose not to include the logs of our
+processes because that would be a virtually unreadable amount of text,
+in certain cases. Every node was run via:
+
+ssh username@hostname.cs.hmc.edu erl -noshell -run philosopher main px,
+where hostname can be inferred by the message logs below.
+
+Test1: 3 nodes in a line, as in node1 <-> node2 <-> node3
+
+We made all nodes join. They all start thinking. We then made each
+hungry in order. Only node1 becomes eating. Node2 holds on to node3's fork. 
+We then make
+node1 stop eating. Node2 starts eating. We then
+make node2 stop eating. Node3 becomes eating. We then make node1 hungry.
+He becomes eating. We then get each to leave.
+
+
+{<0.38.0>,#Ref<0.0.0.198>,become_hungry}
+(enuge93@knuth)20> {philosopher, p2@arden} ! {self(), make_ref(), become_hungry}.     
+{<0.38.0>,#Ref<0.0.0.236>,become_hungry}
+(enuge93@knuth)21> {philosopher, p3@cosmos} ! {self(), make_ref(), become_hungry}.    
+{<0.38.0>,#Ref<0.0.0.240>,become_hungry}
+(enuge93@knuth)22> {philosopher, p1@poinsettia} ! {self(), make_ref(), stop_eating}.  
+{<0.38.0>,#Ref<0.0.0.244>,stop_eating}
+(enuge93@knuth)23> {philosopher, p2@arden} ! {self(), make_ref(), stop_eating}. {<0.38.0>,#Ref<0.0.0.248>,stop_eating}
+(enuge93@knuth)24> {philosopher, p1@poinsettia} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.252>,become_hungry}
+(enuge93@knuth)25> {philosopher, p1@poinsettia} ! {self(), make_ref(), leave}.  {<0.38.0>,#Ref<0.0.0.256>,leave}
+(enuge93@knuth)26> {philosopher, p2@arden} ! {self(),mmake_ref(), leave}.     
+{<0.38.0>,#Ref<0.0.0.260>,leave}
+(enuge93@knuth)27> {philosopher, p3@cosmos} ! {self(), make_ref(), leave}.
+{<0.38.0>,#Ref<0.0.0.264>,leave}
 
 
 Test2: 3 nodes all connected
@@ -31,9 +65,58 @@ All 3 then leave properly.
 {<0.38.0>,#Ref<0.0.0.148>,leave}
 
 
-Test3: A 4-node ring. 
+Test3: A 4-node ring.
+
+Set each node up in order. Make each hungry in order. Node 1 starts eating,
+others stay hungry. Make him stop, node 2 starts eating. Process repeats
+with each. Then make node2 and 4 hungry, both start eating immediately.
+Make them stop, make node1 and 3 hungry, both start eating. The make node2 and 4
+leave. Then make node1 and 3 stop eating and leave. All works fine.
+
+(enuge93@knuth)1> {philosopher, p1@mirkwood} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.35>,become_hungry}
+(enuge93@knuth)2> {philosopher, p2@lothlorien} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.73>,become_hungry}
+(enuge93@knuth)3> {philosopher, p3@ash} ! {self(), make_ref(), become_hungry}.  {<0.38.0>,#Ref<0.0.0.77>,become_hungry}
+(enuge93@knuth)4> {philosopher, p4@bluebell} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.81>,become_hungry}
+(enuge93@knuth)5> {philosopher, p1@mirkwood} ! {self(), make_ref(), stop_eating}.    
+{<0.38.0>,#Ref<0.0.0.85>,stop_eating}
+(enuge93@knuth)6> {philosopher, p2@lothlorien} ! {self(), make_ref(), stop_eating}.
+{<0.38.0>,#Ref<0.0.0.89>,stop_eating}
+(enuge93@knuth)7> {philosopher, p3@ash} ! {self(), make_ref(), stop_eating}.    {<0.38.0>,#Ref<0.0.0.93>,stop_eating}
+(enuge93@knuth)8> {philosopher, p4@bluebell} ! {self(), make_ref(), stop_eating}.
+{<0.38.0>,#Ref<0.0.0.97>,stop_eating}
+(enuge93@knuth)9> {philosopher, p2@lothlorien} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.101>,become_hungry}
+(enuge93@knuth)10> {philosopher, p4@bluebell} ! {self(), make_ref(), become_hungry}.  
+{<0.38.0>,#Ref<0.0.0.105>,become_hungry}
+(enuge93@knuth)12> {philosopher, p2@lothlorien} ! {self(), make_ref(), leave}.  {<0.38.0>,#Ref<0.0.0.113>,leave}
+(enuge93@knuth)13> {philosopher, p4@bluebell} ! {self(), make_ref(), leave}.    {<0.38.0>,#Ref<0.0.0.117>,leave}
+(enuge93@knuth)14> {philosopher, p1@mirkwood} ! {self(), make_ref(), become_hungry}.  
+{<0.38.0>,#Ref<0.0.0.121>,become_hungry}
+(enuge93@knuth)15> {philosopher, p3@ash} ! {self(), make_ref(), become_hungry}. {<0.38.0>,#Ref<0.0.0.125>,become_hungry}
+(enuge93@knuth)16> {philosopher, p1@mirkwood} ! {self(), make_ref(), leave}.    {<0.38.0>,#Ref<0.0.0.129>,leave}
+(enuge93@knuth)17> {philosopher, p3@ash} ! {self(), make_ref(), leave}.         {<0.38.0>,#Ref<0.0.0.133>,leave}
+
+Test4: 5 nodes, 4 of which have one edge to the fifth. (Note that
+node5 is the one adjacent to all others.)
+
+Have the node that is adjacent with all others hungry, then make it
+leave as it is eating. Then make all others hungry, they all become eating.
+Therefore, they all function properly. Yay!
+
+(enuge93@knuth)18> {philosopher, p5@fangorn} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.137>,become_hungry}
+(enuge93@knuth)19> {philosopher, p5@fangorn} ! {self(), make_ref(), leave}.     {<0.38.0>,#Ref<0.0.0.177>,leave}
+(enuge93@knuth)20> {philosopher, p1@mirkwood} ! {self(), make_ref(), become_hungry}.  
+{<0.38.0>,#Ref<0.0.0.181>,become_hungry}
+(enuge93@knuth)21> {philosopher, p2@lothlorien} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.185>,become_hungry}
+(enuge93@knuth)22> {philosopher, p3@ash} ! {self(), make_ref(), become_hungry}. {<0.38.0>,#Ref<0.0.0.189>,become_hungry}
+(enuge93@knuth)23> {philosopher, p4@bluebell} ! {self(), make_ref(), become_hungry}.
+{<0.38.0>,#Ref<0.0.0.193>,become_hungry}
 
 
-Test4: 5 nodes, 4 of which have one edge to the fifth.
 
 
