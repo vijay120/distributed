@@ -1,42 +1,60 @@
 -module(key_value_node).
--export([main/1, storageProcess/1]).
+-export([main/1, storage_process/1]).
 -define(TIMEOUT, 2000).
-% NOTE: a fork is defined as a tuple with two neighbours and an isClean boolean
-% neighbour1 and neighbour2 are encoded via each one's node name, as an atom.
 
-storageProcess(Pid) ->
+storage_process(Pid) ->
 	io:format("storageTable is ~p~n", [Pid]),
-	TableId = Pid,
 	Table = ets:new(storage_table, []),
 	receive 
 		{pid, ref, store, Key, Value} -> 
 			case ets:lookup(Table, Key) of
 				[] -> 	ets:insert(Table, {Key, Value}),
-						{ref, stored, no_value};
+						{ref, stored, no_value}; % These have to be banged back the way, I think.
 				[{Key, OldVal}] -> 	ets:insert(Table, {Key, Value}), 
-									{ref, stored, OldVal}
+									{ref, stored, OldVal} % These have to be banged back the way, I think.
 			end
 end.
+
+% Node adds itself to the network, gets its storage processes (and facilitates
+% all other rebalancing).
+enter_network(NodeInNetwork) ->
+	net_kernel:connect_node(NodeInNetwork),
+	GlobalTable = net_kernel:registered_names(),
+	io:format("Registered table is: ~p~n", GlobalTable). % connect to the network.
 
 main(Params) ->
 		%set up network connections
 		_ = os:cmd("epmd -daemon"),
-		{Num_storage_processes, _ } = string:to_integer(hd(Params)),
-		Reg_name = hd(tl(Params)),
-		net_kernel:start([list_to_atom(Reg_name), shortnames]),
+		{NumArg, _ } = string:to_integer(hd(Params)),
+		NumStorageProcesses = trunc(math:pow(2, NumArg)), 
+		RegName = hd(tl(Params)),
+		net_kernel:start([list_to_atom(RegName), shortnames]),
 		register(node, self()),
-		if length(Params) == 2 -> spawn_tables(Num_storage_processes);
-			true -> true
+		io:format("Registered as ~p at node ~p. ~p~n",
+						  [philosopher, node(), now()]),
+		case length(Params) of
+			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(1)]), % TODO: 1 or 0?
+				 global:register_name(GlobalNodeName, self()),
+				 spawn_tables(NumStorageProcesses);
+			3 -> NodeInNetwork = hd(tl(tl(Params))), % third parameter
+				 enter_network(NodeInNetwork);
+			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
+					  halt()
 		end,
-		halt().
+		% global:register_name(node, self()), % register in global table as well as shortname
+		chill(). % temporary thing to keep it alive.
+		% halt().
 
-spawn_tables(Num_tables) ->
-	if Num_tables == 0
+chill() ->
+	chill(). % woot
+
+spawn_tables(NumTables) ->
+	if NumTables == 0
 		-> true;
 		true ->
-			io:format("Num tables is ~p~n", [Num_tables]),
-			SpawnPID = spawn(key_value_node, storageProcess, [Num_tables]),
-			SpawnName = lists:concat(["Storage", integer_to_list(Num_tables)]),
+			io:format("Num tables is ~p~n", [NumTables]),
+			SpawnPID = spawn(key_value_node, storage_process, [NumTables]),
+			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			global:register_name(SpawnName, SpawnPID),
-			spawn_tables(Num_tables-1)
+			spawn_tables(NumTables-1)
 end.
