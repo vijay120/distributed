@@ -15,7 +15,6 @@ storage_process(_) -> % TODO change when we use Pid
 			end
 end.
 
-<<<<<<< HEAD
 % Generates all possible node names based on the number of storage processes.
 generateNodeNums(0) -> [0].
 generateNodeNums(NumStorageProcesses) -> 
@@ -27,7 +26,7 @@ generateNodeNums(NumStorageProcesses) ->
 % requestStorageTables(EnteringNode, Successor, Predecessor) ->
 requestStorageTables(_, _, _) ->
 	io:format("Got here!").
-=======
+
 hash(Key, Num_storage_processes) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem Num_storage_processes.
 
 
@@ -44,8 +43,6 @@ end.
 is_my_process(NodeId, ProcessId) ->	
 	PossibleIDs = find_all_nodes(0, [], 10),
 	io:format("List of possible ids ~p", PossibleIDs).
-
->>>>>>> 28e4ace92dd701d4e5cb9b5e5e7023e83b3f10a8
 
 % Node adds itself to the network, gets its storage processes (and facilitates
 % all other rebalancing).
@@ -103,12 +100,8 @@ main(Params) ->
 		io:format("Registered as ~p at node ~p. ~p~n",
 						  [node, node(), now()]),
 		case length(Params) of
-<<<<<<< HEAD
 			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]),
-=======
-			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]), % TODO: 1 or 0?
 				 CurrentNodeID = 0,
->>>>>>> 28e4ace92dd701d4e5cb9b5e5e7023e83b3f10a8
 				 DoesRegister = global:register_name(GlobalNodeName, self()),
 				 io:format("Does it register? ~p~n", [DoesRegister]),	
 				 spawn_tables(NumStorageProcesses-1),
