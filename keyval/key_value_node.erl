@@ -15,6 +15,7 @@ storage_process(_) -> % TODO change when we use Pid
 			end
 end.
 
+<<<<<<< HEAD
 % Generates all possible node names based on the number of storage processes.
 generateNodeNums(0) -> [0].
 generateNodeNums(NumStorageProcesses) -> 
@@ -26,6 +27,26 @@ generateNodeNums(NumStorageProcesses) ->
 % requestStorageTables(EnteringNode, Successor, Predecessor) ->
 requestStorageTables(_, _, _) ->
 	io:format("Got here!").
+=======
+hash(Key, Num_storage_processes) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem Num_storage_processes.
+
+
+find_all_nodes(PossibleId, Accin, Maximum) ->
+	if PossibleId > Maximum -> Accin;
+		true -> ConstructName = lists:concat(["Node", integer_to_list(PossibleId)]),
+				case global:whereis_name(ConstructName) of
+					undefined -> find_all_nodes(PossibleId+1, Accin, Maximum);
+					_ -> find_all_nodes(PossibleId+1, lists:concat([Accin, [PossibleId]]), Maximum)
+				end
+end.
+
+
+
+is_my_process(NodeId, ProcessId) ->	
+	PossibleIDs = find_all_nodes(0, [], 10),
+	io:format("List of possible ids ~p", PossibleIDs).
+
+>>>>>>> 28e4ace92dd701d4e5cb9b5e5e7023e83b3f10a8
 
 % Node adds itself to the network, gets its storage processes (and facilitates
 % all other rebalancing).
@@ -83,24 +104,38 @@ main(Params) ->
 		io:format("Registered as ~p at node ~p. ~p~n",
 						  [node, node(), now()]),
 		case length(Params) of
+<<<<<<< HEAD
 			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]),
+=======
+			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]), % TODO: 1 or 0?
+				 CurrentNodeID = 0,
+>>>>>>> 28e4ace92dd701d4e5cb9b5e5e7023e83b3f10a8
 				 DoesRegister = global:register_name(GlobalNodeName, self()),
 				 io:format("Does it register? ~p~n", [DoesRegister]),	
 				 spawn_tables(NumStorageProcesses-1),
 				 GlobalTable = global:registered_names(),
-				 io:format("Registered table is: ~p~n", [GlobalTable]);
+				 io:format("Registered table is: ~p~n", [GlobalTable]),
+				 processMessages(NumStorageProcesses, CurrentNodeID);
 			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
+				 CurrentNodeID = list_to_atom(NodeInNetwork),
+				 processMessages(NumStorageProcesses, CurrentNodeID),
 				 io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
 				 enter_network(NodeInNetwork, NumStorageProcesses-1);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
 		end,
-		% global:register_name(node, self()), % register in global table as well as shortname
-		chill(). % temporary thing to keep it alive.
-		% halt().
+		halt().
 
-chill() ->
-	chill(). % woot
+processMessages(NumStorageProcesses, CurrentNodeID) ->
+		io:format("in process messages"),
+		receive 
+			{Pid, Ref, store, Key, Value} -> 
+				io:format("recieved key: ~p", [Key]),
+				is_my_process(CurrentNodeID, hash(Key, NumStorageProcesses));
+			_ -> io:format("IN some other message")
+			%check if hash(key) == one of your storage processes
+		end.
+
 
 spawn_tables(NumTables) ->
 	if NumTables < 0
