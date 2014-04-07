@@ -60,7 +60,7 @@ main(Params) ->
 				 io:format("Does it register? ~p~n", [DoesRegister]),	
 				 spawn_tables(NumStorageProcesses),
 				 GlobalTable = global:registered_names(),
-				 io:format("Registered table is: ~p~n", [GlobalTable]);
+				 io:format("Registered table is: ~p~n", [GlobalTable]),
 				 processMessages(NumStorageProcesses, CurrentNodeID);
 			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
 				 CurrentNodeID = list_to_atom(NodeInNetwork),
