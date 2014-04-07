@@ -38,8 +38,10 @@ is_my_process(NodeId, ProcessId) ->
 % all other rebalancing).
 enter_network(NodeInNetwork) ->
 	net_kernel:connect_node(NodeInNetwork),
-	GlobalTable = net_kernel:registered_names(),
-	io:format("Registered table is: ~p~n", GlobalTable). % connect to the network.
+	global:sync(),
+	global:register_name(stupid, self()), % do things before registering us.
+	GlobalTable = global:registered_names(),
+	io:format("Registered table is: ~p~n", [GlobalTable]). % connect to the network.
 
 main(Params) ->
 		%set up network connections
@@ -50,16 +52,20 @@ main(Params) ->
 		net_kernel:start([list_to_atom(RegName), shortnames]),
 		register(node, self()),
 		io:format("Registered as ~p at node ~p. ~p~n",
-						  [philosopher, node(), now()]),
+						  [node, node(), now()]),
 		case length(Params) of
-			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]),
+			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]), % TODO: 1 or 0?
 				 CurrentNodeID = 0,
-				 global:register_name(GlobalNodeName, self()),
+				 DoesRegister = global:register_name(GlobalNodeName, self()),
+				 io:format("Does it register? ~p~n", [DoesRegister]),	
 				 spawn_tables(NumStorageProcesses),
+				 GlobalTable = global:registered_names(),
+				 io:format("Registered table is: ~p~n", [GlobalTable]);
 				 processMessages(NumStorageProcesses, CurrentNodeID);
-			3 -> NodeInNetwork = hd(tl(tl(Params))), % third parameter
+			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
 				 CurrentNodeID = list_to_atom(NodeInNetwork),
 				 processMessages(NumStorageProcesses, CurrentNodeID),
+				 io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
 				 enter_network(NodeInNetwork);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
