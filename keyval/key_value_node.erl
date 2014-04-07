@@ -26,8 +26,7 @@ find_all_nodes(PossibleId, Accin, Maximum) ->
 					_ -> find_all_nodes(PossibleId+1, lists:concat([Accin, [PossibleId]]), Maximum)
 				end
 end.
-
-
+%trying to resolve stuff
 
 is_my_process(NodeId, ProcessId) ->	
 	PossibleIDs = find_all_nodes(0, [], 10),
