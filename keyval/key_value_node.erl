@@ -18,17 +18,28 @@ storageProcess(Pid) ->
 			end
 end.
 
+hash(Key, Num_storage_processes) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem Num_storage_processes.
+
+isMyProcess(NodeId, ProcessId) ->
+	
+
 main(Params) ->
 		%set up network connections
 		_ = os:cmd("epmd -daemon"),
-		{Num_storage_processes, _ } = string:to_integer(hd(Params)),
+		{Num_storage_processes, _} = string:to_integer(hd(Params)),
 		Reg_name = hd(tl(Params)),
 		net_kernel:start([list_to_atom(Reg_name), shortnames]),
 		register(node, self()),
 		if length(Params) == 2 -> spawn_tables(Num_storage_processes);
 			true -> true
 		end,
+		processMessages(),
 		halt().
+
+processMessages() ->
+		receive 
+			{pid, ref, store, Key, Value} -> 
+
 
 spawn_tables(Num_tables) ->
 	if Num_tables == 0
