@@ -3,7 +3,7 @@
 -define(TIMEOUT, 2000).
 
 storage_process(Pid) ->
-	io:format("storageTable is ~p~n", [Pid]),
+	%io:format("storageTable is ~p~n", [Pid]),
 	Table = ets:new(storage_table, []),
 	receive 
 		{pid, ref, store, Key, Value} -> 
@@ -19,8 +19,10 @@ end.
 % all other rebalancing).
 enter_network(NodeInNetwork) ->
 	net_kernel:connect_node(NodeInNetwork),
-	GlobalTable = net_kernel:registered_names(),
-	io:format("Registered table is: ~p~n", GlobalTable). % connect to the network.
+	global:sync(),
+	global:register_name(stupid, self()), % do things before registering us.
+	GlobalTable = global:registered_names(),
+	io:format("Registered table is: ~p~n", [GlobalTable]). % connect to the network.
 
 main(Params) ->
 		%set up network connections
@@ -31,12 +33,16 @@ main(Params) ->
 		net_kernel:start([list_to_atom(RegName), shortnames]),
 		register(node, self()),
 		io:format("Registered as ~p at node ~p. ~p~n",
-						  [philosopher, node(), now()]),
+						  [node, node(), now()]),
 		case length(Params) of
 			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(1)]), % TODO: 1 or 0?
-				 global:register_name(GlobalNodeName, self()),
-				 spawn_tables(NumStorageProcesses);
-			3 -> NodeInNetwork = hd(tl(tl(Params))), % third parameter
+				 DoesRegister = global:register_name(GlobalNodeName, self()),
+				 io:format("Does it register? ~p~n", [DoesRegister]),	
+				 spawn_tables(NumStorageProcesses),
+				 GlobalTable = global:registered_names(),
+				 io:format("Registered table is: ~p~n", [GlobalTable]);
+			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
+				 io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
 				 enter_network(NodeInNetwork);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
@@ -52,7 +58,7 @@ spawn_tables(NumTables) ->
 	if NumTables == 0
 		-> true;
 		true ->
-			io:format("Num tables is ~p~n", [NumTables]),
+			%io:format("Num tables is ~p~n", [NumTables]),
 			SpawnPID = spawn(key_value_node, storage_process, [NumTables]),
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			global:register_name(SpawnName, SpawnPID),
