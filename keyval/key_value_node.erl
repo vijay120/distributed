@@ -17,8 +17,10 @@ end.
 
 hash(Key, Num_storage_processes) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem Num_storage_processes.
 
-
 find_all_nodes(PossibleId, Accin, Maximum) ->
+	global:sync(),
+	GlobalTable = global:registered_names(),
+	io:format("Registered table is: ~p~n", [GlobalTable]), % connect to the network.
 	if PossibleId > Maximum -> Accin;
 		true -> ConstructName = lists:concat(["Node", integer_to_list(PossibleId)]),
 				case global:whereis_name(ConstructName) of
@@ -26,11 +28,11 @@ find_all_nodes(PossibleId, Accin, Maximum) ->
 					_ -> find_all_nodes(PossibleId+1, lists:concat([Accin, [PossibleId]]), Maximum)
 				end
 end.
-%trying to resolve stuff
 
 is_my_process(NodeId, ProcessId) ->	
 	PossibleIDs = find_all_nodes(0, [], 10),
-	io:format("List of possible ids ~p", PossibleIDs).
+	io:format("List of possible ids ~p", PossibleIDs),
+	
 
 
 % Node adds itself to the network, gets its storage processes (and facilitates
@@ -61,10 +63,12 @@ main(Params) ->
 				 GlobalTable = global:registered_names(),
 				 io:format("Registered table is: ~p~n", [GlobalTable]),
 				 processMessages(NumStorageProcesses, CurrentNodeID);
-			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
-				 CurrentNodeID = list_to_atom(NodeInNetwork),
+			3 -> %StringNodeInNetwork = atom_to_list(hd(tl(tl(Params)))),
+				 NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
+				 %CurrentNodeID = list_to_atom(NodeInNetwork),
+				 CurrentNodeID = string:to_integer(string:substr(hd(tl(tl(Params))), length(hd(tl(tl(Params)))), length(hd(tl(tl(Params)))))),
 				 processMessages(NumStorageProcesses, CurrentNodeID),
-				 io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
+				 %io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
 				 enter_network(NodeInNetwork);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
