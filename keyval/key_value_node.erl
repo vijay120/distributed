@@ -2,7 +2,7 @@
 -export([main/1, storage_process/1]).
 -define(TIMEOUT, 2000).
 
-storage_process(Pid) ->
+storage_process(_) -> % TODO change when we use Pid
 	%io:format("storageTable is ~p~n", [Pid]),
 	Table = ets:new(storage_table, []),
 	receive 
@@ -15,13 +15,61 @@ storage_process(Pid) ->
 			end
 end.
 
+% Generates all possible node names based on the number of storage processes.
+generateNodeNums(0) -> [0].
+generateNodeNums(NumStorageProcesses) -> 
+	[NumStorageProcesses] ++ generateNodeNames(NumStorageProcesses-1).
+
+
+% Send a message to Predecessor requesting all the storage tables indexed from 
+% EnteringNode to Successor in our global registry table.
+% requestStorageTables(EnteringNode, Successor, Predecessor) ->
+requestStorageTables(_, _, _) ->
+	io:format("Got here!").
+
 % Node adds itself to the network, gets its storage processes (and facilitates
 % all other rebalancing).
-enter_network(NodeInNetwork) ->
+
+% NOTE: All the "nodes" mentioned below are actually just the number they are
+% registered as. E.x., "Node1" = 1 below.
+enter_network(NodeInNetwork, NumStorageProcesses) ->
 	net_kernel:connect_node(NodeInNetwork),
 	global:sync(),
-	global:register_name(stupid, self()), % do things before registering us.
-	GlobalTable = global:registered_names(),
+
+	NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses), % a sorted list TODO see if it's sorted sensibly
+	io:format("Our sorted list is: ~p~n", NodesInNetworkList),
+	NodesInNetworkSet = ordsets:from_list(NodesInNetworkList),
+	AllNodes = ordsets:from_list(generateNodeNums(NumStorageProcesses)),
+	NodesAvailable = ordsets:to_list(ordsets:subtract(AllNodes, NodesInNetwork)),
+	RandomVal = random:uniform(length(NodesAvailable),
+	RandomFreeNode = lists:nth(RandomVal, NodesAvailable),
+
+	% extra logic needed for edge cases of wrapping around list
+	if 
+		RandomVal == 0 -> PreviousNodeIndex = NumStorageProcesses;
+		true 		   -> PreviousNodeIndex = RandomVal - 1
+	end,
+
+	PreviousNode = lists:nth(PreviousNodeIndex, NodesAvailable), % get the previous node,
+																 % TODO then send a message across the ring to him.
+
+	io:format("Our random free node is: ~p~n", RandomFreeNode),
+
+	% edge case needed for wrapping around other end of list
+	if
+		RandomVal == NumStorageProcesses -> NextNodeIndex = 0;
+		true 							 -> NextNodeIndex = RandomVal + 1
+	end,
+
+	NextNode = lists:nth(NextNodeIndex, NodesAvailable)	
+
+	requestStorageTables(RandomFreeNode, NextNode, PreviousNode), % send a message from RandomFreeNode to
+																  % previous node requesting all
+																  % storage processes from r to next.
+
+
+	global:register_name(lists:concat(["Node", integer_to_list(RandomFreeNode)], self()), % do things before registering us.
+	
 	io:format("Registered table is: ~p~n", [GlobalTable]). % connect to the network.
 
 main(Params) ->
@@ -35,15 +83,15 @@ main(Params) ->
 		io:format("Registered as ~p at node ~p. ~p~n",
 						  [node, node(), now()]),
 		case length(Params) of
-			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(1)]), % TODO: 1 or 0?
+			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]),
 				 DoesRegister = global:register_name(GlobalNodeName, self()),
 				 io:format("Does it register? ~p~n", [DoesRegister]),	
-				 spawn_tables(NumStorageProcesses),
+				 spawn_tables(NumStorageProcesses-1),
 				 GlobalTable = global:registered_names(),
 				 io:format("Registered table is: ~p~n", [GlobalTable]);
 			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
 				 io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
-				 enter_network(NodeInNetwork);
+				 enter_network(NodeInNetwork, NumStorageProcesses-1);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
 		end,
@@ -55,7 +103,7 @@ chill() ->
 	chill(). % woot
 
 spawn_tables(NumTables) ->
-	if NumTables == 0
+	if NumTables < 0
 		-> true;
 		true ->
 			%io:format("Num tables is ~p~n", [NumTables]),
