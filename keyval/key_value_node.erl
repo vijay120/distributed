@@ -1,29 +1,40 @@
 -module(key_value_node).
--export([main/1, storage_process/1, is_my_process/3]).
+-export([main/1, storage_process/2, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
-storage_process_helper(Table) ->
+% NOTE VIJAY: I made it also take its own process number. 
+% This was so it could respond with it so a new node knows
+% when it receives a table which process it should be registered as.
+storage_process_helper(Table, StorageID) ->
 	receive 
 		{Pid, Ref, store, Key, Value} -> 
 			case ets:lookup(Table, Key) of
 				[] -> 	io:format("I am empty"),
 						ets:insert(Table, {Key, Value}),
-						Pid ! {Ref, stored, no_value}, % These have to be banged back the way, I think.
-						storage_process(Table);
+						Pid ! {Ref, stored, no_value}; % These have to be banged back the way, I think.
+						% storage_process(Table); % TODO VIJAY: I changed this from storage_process to storage_process_helper
+												% and am pulling it out of the receive--everything will do it at the end.
 				[{Key, OldVal}] -> 	io:format("I am not empty"),
 									ets:insert(Table, {Key, Value}), 
-									Pid ! {Ref, stored, OldVal}, % These have to be banged back the way, I think.
-									storage_process(Table)
-			end
-		end.
+									Pid ! {Ref, stored, OldVal} % These have to be banged back the way, I think.
+									% storage_process(Table)
+			end;
+		 {Pid, requestStorageTables, RequestingNodeNum, ParentNodeNum} -> 
+		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
+		 	global:send(ParentNode, {self(), sendStorageTables, Table, RequestingNodeNum, StorageID}); % TODO: Transform our table into a duplicate.
+		 Message -> 
+		 	io:format("Malformed request ~p~n", [Message])
+	end,
+	storage_process_helper(Table, StorageID).
 
-storage_process(OldTable) -> % TODO change when we use Pid
+% StorageID is its int value in the global registry table
+storage_process(OldTable, StorageID) -> % TODO change when we use Pid
 	io:format("Storage process recieved something~n"),
 	case OldTable == [] of
 		true -> 
 			Table = ets:new(storage_table, []),
-			storage_process_helper(Table);
-		false -> storage_process_helper(OldTable)
+			storage_process_helper(Table, StorageID);
+		false -> storage_process_helper(OldTable, StorageID)
 	end.
 
 % Generates all possible node names based on the number of storage processes.
@@ -102,6 +113,7 @@ node_from_storage_process(StorageProcessNum, NodesInNetwork) ->
 % NOTE: Any message should keep track of the original sender (if it matters) in
 %		the message itself. It should also be designed so any intermediary
 %		could check the intended recipient, and forward along or read if needed.
+% 		NumStorageProcesses MUST BE (2^m)-1
 send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
 	NextNodeNum = get_next_node(SenderNodeNum, NodesInNetwork),
@@ -290,7 +302,7 @@ main(Params) ->
 process_messages(NumStorageProcesses, CurrentNodeID) ->
 		io:format("in process messages"),
 		receive 
-			{Pid, Ref, store, Key, Value} -> 
+			{Pid, Ref, store, Key, Value} -> % Insert key-value into a storage process if it fits our hash.
 				io:format("received key: ~p", [Key]),
 				ProspectiveStorageTable = hash(Key, NumStorageProcesses),
 				case is_my_process(CurrentNodeID, ProspectiveStorageTable, NumStorageProcesses) of
@@ -302,19 +314,28 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						process_storage_reply_messages(Pid, Ref);
 					false -> io:format("I will deal with this case later")
 				end;
-			{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} -> 
+			{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} ->  % forward along or send to a storage process we own
 				if 
 					CurrentNodeID == DestinationNodeNum -> % send message to storage processes on this node.
 														% receive tables back. Send table via global:send
 														% to OriginalNodeNum.
 							OurStorageProcessNums = calc_storage_processes(DestinationNodeNum, OriginalNodeNum, NumStorageProcesses-1),
 							OurStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, OurStorageProcessNums),
-							%lists:map(fun(X) -> global:send(X, TODOMESSAGETYPE) end, OurStorageProcessNames),
+							RequestTablesMessage = {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum}, % Original is the requester, destination node received it.
+							lists:map(fun(X) -> global:send(X, RequestTablesMessage) end, OurStorageProcessNames),
 							io:format("Got the message! We should send the proper storage processes data via global:send ");
 					true -> io:format("Not for us! Passing it along to: ~p~n", [DestinationNodeNum]),
 							send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
 				end;
-			_ -> io:format("In some other message")
+			{Pid, sendStorageTables, Table, DestinationNodeNum, StorageID} ->
+				if
+				 	CurrentNodeID == DestinationNodeNum -> % table meant for us
+				 		io:format("Received table with ID: ~p~n", [StorageID]);
+				 	true -> % not meant for us, forward onwards
+				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTables, Table, DestinationNodeNum, StorageID})
+				 end; 
+			Message -> 
+				io:format("Received some malformed message ~p~n", [Message])
 		end,
 		process_messages(NumStorageProcesses, CurrentNodeID).
 
@@ -333,7 +354,8 @@ spawn_tables(NumTables) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			SpawnPID = spawn(key_value_node, storage_process, [[]]),
+			SpawnPID = spawn(key_value_node, storage_process, [[], NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
+																	 % TODO VIJAY: and then just spawn with storage_process_helper?
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			global:register_name(SpawnName, SpawnPID),
 			spawn_tables(NumTables-1)
