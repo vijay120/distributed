@@ -76,11 +76,11 @@ calc_storage_neighbours(EnteringStorageProcesses, NumStorageProcesses) ->
 %Get the greatest storage process less than our smallest if it exists;
 %		otherwise get the highest valued one. (To deal with mod)
 % If the previous node is a neighbour, just go right to it.
-get_closest_neighbour_to_prev(EnteringNodeNum, PrevNodeNum, AllStorageNeighbours, NumStorageProcesses) ->
+get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses) ->
 	AllNeighboursSorted = lists:sort(AllStorageNeighbours),
-	case lists:member(PrevNodeNum, AllNeighboursSorted) of
-		true -> PrevNodeNum;
-		_Else ->	SmallerNeighbours = lists:filter(fun(X) -> X < EnteringNodeNum end, AllStorageNeighbours),
+	case lists:member(TargetNodeNum, AllNeighboursSorted) of
+		true -> TargetNodeNum;
+		_Else ->	SmallerNeighbours = lists:filter(fun(X) -> X < SenderNodeNum end, AllStorageNeighbours),
 				if
 					SmallerNeighbours == [] -> lists:last(AllNeighboursSorted);
 					true 					-> lists:last(SmallerNeighbours)
@@ -99,12 +99,12 @@ node_from_storage_process(StorageProcessNum, NodesInNetwork) ->
 
 
 % Send a message to TargetNode from our current node.
-request_storage_tables(EnteringNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
+send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
-	NextNodeNum = get_next_node(EnteringNodeNum, NodesInNetwork),
+	NextNodeNum = get_next_node(SenderNodeNum, NodesInNetwork),
 	% PrevNodeNum = get_previous_node(EnteringNodeNum, NodesInNetwork),
 
-	EnteringNode = lists:concat(["Node", integer_to_list(EnteringNodeNum)]),
+	SenderNode = lists:concat(["Node", integer_to_list(SenderNodeNum)]),
 	NextNode = lists:concat(["Node", integer_to_list(NextNodeNum)]),
 	% PrevNode = lists:concat(["Node", integer_to_list(PrevNodeNum)]),
 
@@ -117,15 +117,15 @@ request_storage_tables(EnteringNodeNum, TargetNodeNum, NumStorageProcesses, Mess
 	% 5. Send message via global:send to that node.
 
 	% 1.
-	EnteringStorageProcesses = calc_storage_processes(EnteringNodeNum, NextNodeNum, NumStorageProcesses),% storage processes on our entering node
-	io:format("EnteringStorageProcesses are: ~p~n", [EnteringStorageProcesses]),
+	SenderStorageProcesses = calc_storage_processes(SenderNodeNum, NextNodeNum, NumStorageProcesses),% storage processes on our entering node
+	io:format("EnteringStorageProcesses are: ~p~n", [SenderStorageProcesses]),
 
 	% 2.
-	AllStorageNeighbours = calc_storage_neighbours(EnteringStorageProcesses, NumStorageProcesses),
+	AllStorageNeighbours = calc_storage_neighbours(SenderStorageProcesses, NumStorageProcesses),
 	io:format("AllStorageNeighbours are: ~p~n", [AllStorageNeighbours]),
 
 	% 3.
-	ClosestStorageNeighbourNum = get_closest_neighbour_to_prev(EnteringNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses),
+	ClosestStorageNeighbourNum = get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses),
 	io:format("ClosestStorageNeighbourNum is: ~p~n", [ClosestStorageNeighbourNum]),
 
 	% 4. 
@@ -244,17 +244,14 @@ enter_network(NodeInNetwork, NumStorageProcesses) ->
 
 	% send message that can be transferred onwards:
 	% {sender (i.e. self()), requestStorageTables (atom), original node, target node}
-	% chill then knows whether to call request_storage_tables with the updated stuff
 	RequestStorageTablesMsg = {self(), requestStorageTables, RandomFreeNodeNum, PreviousNodeNum},
 
-	request_storage_tables(RandomFreeNodeNum, PreviousNodeNum, NumStorageProcesses, RequestStorageTablesMsg), % send a message from RandomFreeNode to
+	send_node_message(RandomFreeNodeNum, PreviousNodeNum, NumStorageProcesses, RequestStorageTablesMsg), % send a message from RandomFreeNode to
 																  % previous node requesting all
 																  % storage processes from r to next.
 
 	global:register_name(RandomFreeNode, self()),
 	{RandomFreeNodeNum, RandomFreeNode}. % do things before registering us.
-	
-	%io:format("Registered table is: ~p~n", [GlobalTable]). % connect to the network.
 
 main(Params) ->
 		%set up network connections
@@ -274,40 +271,19 @@ main(Params) ->
 				 spawn_tables(NumStorageProcesses-1),
 				 GlobalTable = global:registered_names(),
 				 io:format("Registered table is: ~p~n", [GlobalTable]),
-				 process_messages(NumStorageProcesses, CurrentNodeID),
-				 chill(CurrentNodeID, GlobalNodeName, NumStorageProcesses-1);
+				 process_messages(NumStorageProcesses, CurrentNodeID);
 			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
 				 % CurrentNodeID = list_to_atom(NodeInNetwork),
 				 %process_messages(NumStorageProcesses, CurrentNodeID),
 				 % io:format("NodeInNetwork is: ~p~n", [NodeInNetwork]),
 				 {OurNodeNum, OurNode} = enter_network(NodeInNetwork, NumStorageProcesses-1),
-				 chill(OurNodeNum, OurNode, NumStorageProcesses-1);
+				 process_messages(NumStorageProcesses, OurNodeNum);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n"),
 					  halt()
 		end,
 		halt().
 
-% Handle message routing for requestTables. Pass it along if you're not
-% the intended recipient, otherwise somehow actually transfer the
-% storage processes themselves to the successor.
-chill(OurNodeNum, OurNode, NumStorageProcesses) -> 
-	receive
-		{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} -> 
-			if 
-				OurNodeNum == DestinationNodeNum -> % send message to storage processes on this node.
-													% receive tables back. Send table via global:send
-													% to OriginalNodeNum.
-						OurStorageProcessNums = calc_storage_processes(DestinationNodeNum, OriginalNodeNum, NumStorageProcesses),
-						OurStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, OurStorageProcesses),
-						lists:map(fun(X) -> global:send(X, TODOMESSAGETYPE) end, OurStorageProcessNames),
-						io:format("Got the message! We should send the proper storage processes data via global:send ");
-				true -> io:format("Not for us! Passing it along to: ~p~n", [DestinationNodeNum]),
-						request_storage_tables(OurNodeNum, DestinationNodeNum, NumStorageProcesses, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
-			end;
-		_ -> io:format("Received...something? ~n")
-	end,
-	chill(OurNodeNum,OurNode,NumStorageProcesses).
-
+% Handle any message into the non-storage process for a node.
 process_messages(NumStorageProcesses, CurrentNodeID) ->
 		io:format("in process messages"),
 		receive 
@@ -320,12 +296,24 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
-						process_storage_reply_messages(Pid, Ref),
-						process_messages(NumStorageProcesses, CurrentNodeID);
+						process_storage_reply_messages(Pid, Ref);
 					false -> io:format("I will deal with this case later")
 				end;
-			_ -> io:format("IN some other message")
-		end.
+			{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} -> 
+				if 
+					CurrentNodeID == DestinationNodeNum -> % send message to storage processes on this node.
+														% receive tables back. Send table via global:send
+														% to OriginalNodeNum.
+							OurStorageProcessNums = calc_storage_processes(DestinationNodeNum, OriginalNodeNum, NumStorageProcesses-1),
+							OurStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, OurStorageProcessNums),
+							%lists:map(fun(X) -> global:send(X, TODOMESSAGETYPE) end, OurStorageProcessNames),
+							io:format("Got the message! We should send the proper storage processes data via global:send ");
+					true -> io:format("Not for us! Passing it along to: ~p~n", [DestinationNodeNum]),
+							send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
+				end;
+			_ -> io:format("In some other message")
+		end,
+		process_messages(NumStorageProcesses, CurrentNodeID).
 
 process_storage_reply_messages(OldPid, OldRef) ->
 	receive
