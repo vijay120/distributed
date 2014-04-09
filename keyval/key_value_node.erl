@@ -1,17 +1,19 @@
 -module(key_value_node).
--export([main/1, storage_process/1]).
+-export([main/1, storage_process/1, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
 storage_process(_) -> % TODO change when we use Pid
 	%io:format("storageTable is ~p~n", [Pid]),
 	Table = ets:new(storage_table, []),
 	receive 
-		{pid, ref, store, Key, Value} -> 
+		{Pid, Ref, store, Key, Value} -> 
 			case ets:lookup(Table, Key) of
-				[] -> 	ets:insert(Table, {Key, Value}),
-						{ref, stored, no_value}; % These have to be banged back the way, I think.
-				[{Key, OldVal}] -> 	ets:insert(Table, {Key, Value}), 
-									{ref, stored, OldVal} % These have to be banged back the way, I think.
+				[] -> 	io:format("I am empty"),
+						ets:insert(Table, {Key, Value}),
+						Pid ! {Ref, stored, no_value}; % These have to be banged back the way, I think.
+				[{Key, OldVal}] -> 	io:format("I am not empty"),
+									ets:insert(Table, {Key, Value}), 
+									Pid ! {Ref, stored, OldVal} % These have to be banged back the way, I think.
 			end
 end.
 
@@ -33,7 +35,7 @@ hash(Key, NumStorageProcesses) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) 
 find_all_nodes(PossibleId, Accin, Maximum) ->
 	global:sync(),
 	GlobalTable = global:registered_names(),
-	io:format("Registered table is: ~p~n", [GlobalTable]), % connect to the network.
+	%io:format("Registered table is: ~p~n", [GlobalTable]), % connect to the network.
 	if PossibleId > Maximum -> Accin;
 		true -> ConstructName = lists:concat(["Node", integer_to_list(PossibleId)]),
 				case global:whereis_name(ConstructName) of
@@ -43,16 +45,36 @@ find_all_nodes(PossibleId, Accin, Maximum) ->
 end.
 
 
-indentity(NodeID, Value, Previous) ->
-	if NodeID == Value -> NodeID;
-		true -> Previous
-	end.
+indexAt(Array, IndexAt, Value) ->
+	if IndexAt > length(Array) -> -1;
+		true -> case lists:nth(IndexAt, Array) == Value of 
+					true -> IndexAt;
+					false -> indexAt(Array, IndexAt+1, Value)
+				end
+			end.
 
-is_my_process(NodeId, ProcessId) ->	
-	PossibleIDs = find_all_nodes(0, [], 10),
-	IndexAt = lists:foldl(fun(X, Accin) -> indentity(NodeId, X, Accin) end, -1, PossibleIDs),
-	io:format("List of possible ids ~p", IndexAt).
-	
+
+is_my_process(NodeId, ProcessId, NumStorageProcesses) ->	
+	PossibleIDs = find_all_nodes(0, [], NumStorageProcesses-1),
+	%PossibleIDs = [3, 10, 12],
+	IndexAt = indexAt(PossibleIDs, 1, NodeId),
+	if IndexAt == length(PossibleIDs) -> 
+		IDIsGreaterThanLast = (ProcessId >= NodeId) and (ProcessId < NumStorageProcesses),
+		IDIsLesserThanLast = (ProcessId >= 0) and (ProcessId < lists:nth(1, PossibleIDs)),
+		%io:format("greater is ~p and less than is ~p", [IDIsGreaterThanLast], [IDIsLesserThanLast]),
+		case IDIsGreaterThanLast or IDIsLesserThanLast of
+			true -> true;
+			false -> false
+		end;
+
+		true -> 
+			NextNode = lists:nth(IndexAt+1, PossibleIDs),
+			case (ProcessId >= NodeId) and (ProcessId < NextNode) of
+				true -> true;
+				false -> false
+			end
+		end.
+
 
 % Node adds itself to the network, gets its storage processes (and facilitates
 % all other rebalancing).
@@ -96,7 +118,6 @@ enter_network(NodeInNetwork, NumStorageProcesses) ->
 	requestStorageTables(RandomFreeNode, NextNode, PreviousNode), % send a message from RandomFreeNode to
 																  % previous node requesting all
 																  % storage processes from r to next.
-
 
 	global:register_name(lists:concat(["Node", integer_to_list(RandomFreeNode)]), self()). % do things before registering us.
 	
@@ -142,10 +163,28 @@ processMessages(NumStorageProcesses, CurrentNodeID) ->
 		receive 
 			{Pid, Ref, store, Key, Value} -> 
 				io:format("recieved key: ~p", [Key]),
-				is_my_process(CurrentNodeID, hash(Key, NumStorageProcesses));
+				ProspectiveStorageTable = hash(Key, NumStorageProcesses),
+				case is_my_process(CurrentNodeID, ProspectiveStorageTable, NumStorageProcesses) of
+					true -> 
+						io:format("This is true"),
+						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
+						io:format("Storage process is ~p", [ConstructedStorageProcess]),
+						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
+						processStorageReplyMessages(Pid, Ref);
+					false -> io:format("I will deal with this case later")
+				end;
 			_ -> io:format("IN some other message")
-			%check if hash(key) == one of your storage processes
 		end.
+
+processStorageReplyMessages(OldPid, OldRef) ->
+	receive
+		{Ref, stored, no_value} -> 
+					io:format("I am exiting with no value"),
+					OldPid ! {OldRef, stored, no_value};
+		{Ref, stored, OldVal} -> 
+					io:format("I am exiting with old value"),
+					OldPid ! {OldRef, stored, OldVal}
+	end.
 
 
 spawn_tables(NumTables) ->
