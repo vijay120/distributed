@@ -99,6 +99,9 @@ node_from_storage_process(StorageProcessNum, NodesInNetwork) ->
 
 
 % Send a message to TargetNode from our current node.
+% NOTE: Any message should keep track of the original sender (if it matters) in
+%		the message itself. It should also be designed so any intermediary
+%		could check the intended recipient, and forward along or read if needed.
 send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
 	NextNodeNum = get_next_node(SenderNodeNum, NodesInNetwork),
