@@ -2,20 +2,29 @@
 -export([main/1, storage_process/1, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
-storage_process(_) -> % TODO change when we use Pid
-	%io:format("storageTable is ~p~n", [Pid]),
-	Table = ets:new(storage_table, []),
+storage_process_helper(Table) ->
 	receive 
 		{Pid, Ref, store, Key, Value} -> 
 			case ets:lookup(Table, Key) of
 				[] -> 	io:format("I am empty"),
 						ets:insert(Table, {Key, Value}),
-						Pid ! {Ref, stored, no_value}; % These have to be banged back the way, I think.
+						Pid ! {Ref, stored, no_value}, % These have to be banged back the way, I think.
+						storage_process(Table);
 				[{Key, OldVal}] -> 	io:format("I am not empty"),
 									ets:insert(Table, {Key, Value}), 
-									Pid ! {Ref, stored, OldVal} % These have to be banged back the way, I think.
+									Pid ! {Ref, stored, OldVal}, % These have to be banged back the way, I think.
+									storage_process(Table)
 			end
-end.
+		end.
+
+storage_process(OldTable) -> % TODO change when we use Pid
+	io:format("Storage process recieved something~n"),
+	case OldTable == [] of
+		true -> 
+			Table = ets:new(storage_table, []),
+			storage_process_helper(Table);
+		false -> storage_process_helper(OldTable)
+	end.
 
 % Generates all possible node names based on the number of storage processes.
 generateNodeNums(0) -> [0];
@@ -170,7 +179,8 @@ processMessages(NumStorageProcesses, CurrentNodeID) ->
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
-						processStorageReplyMessages(Pid, Ref);
+						processStorageReplyMessages(Pid, Ref),
+						processMessages(NumStorageProcesses, CurrentNodeID);
 					false -> io:format("I will deal with this case later")
 				end;
 			_ -> io:format("IN some other message")
@@ -191,8 +201,7 @@ spawn_tables(NumTables) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			%io:format("Num tables is ~p~n", [NumTables]),
-			SpawnPID = spawn(key_value_node, storage_process, [NumTables]),
+			SpawnPID = spawn(key_value_node, storage_process, [[]]),
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			global:register_name(SpawnName, SpawnPID),
 			spawn_tables(NumTables-1)
