@@ -31,13 +31,21 @@ storage_process_helper(Table, StorageID) ->
 
 		 	% Unregister as the official storage table, unregister our duplicate which no longer
 		 	% exists. And then register as the duplicate.
+		 	global:sync(),
 		 	global:unregister_name(StorageName),
 		 	global:unregister_name(DuplicateName),
 		 	global:register_name(DuplicateName, self()), % TODO Do we need a sync here somewhere?
+		 	global:sync(),
 		 	global:send(ParentNode, {self(), sendStorageTable, Table, RequestingNodeNum, StorageID});
+		 % {Pid, makeDuplicates, Table, StorageID} -> % special case for second node starting up. we must force it to take first's duplicates.
+		 % 	StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
+		 % 	global:register_name()
 		 {Pid, kill} -> % Message from our parent node that we no longer need to exist. (So we must have been a duplicate.)
 		 	io:format("Received kill message. ~n"),
 		 	exit("We no longer need to be duplicating data. ~n");
+		 {Pid, requestDuplicates, RequestingNodeNum, ParentNodeNum} -> % Special case for two nodes. Send the table without unregistering.
+		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
+		 	global:send(ParentNode, {self(), sendDuplicateTable, Table, RequestingNodeNum, StorageID});
 		 Message -> 
 		 	io:format("Malformed request ~p~n", [Message])
 	end,
@@ -296,6 +304,16 @@ enter_network(NodeInNetwork, NumStorageProcesses) ->
 	PreviousNodeNum = get_previous_node(RandomFreeNodeNum, NodesInNetworkList),
 	NextNodeNum = get_next_node(RandomFreeNodeNum, NodesInNetworkList),
 
+	if 
+		PreviousNodeNum == NextNodeNum -> % We only have two nodes. We need to tell the other node
+										  % to give us the data we should duplicate. 
+			io:format("GOT TO SPECIAL CASE FOR REQUESTING DUPLICATES"),
+			PreviousNode = lists:concat(["Node", integer_to_list(PreviousNodeNum)]),
+			global:send(PreviousNode, {self(), requestDuplicates, RandomFreeNodeNum});
+		true ->
+			false
+	end,
+
 	io:format("Previous Node is: ~p~n", [PreviousNodeNum]),
 	io:format("Next Node is: ~p~n", [NextNodeNum]),
 
@@ -342,6 +360,7 @@ main(Params) ->
 
 % Handle any message into the non-storage process for a node.
 process_messages(NumStorageProcesses, CurrentNodeID) ->
+		global:sync(),
 		io:format("in process messages ~n"),
 		io:format("The state of the global table is: ~p~n", [lists:sort(global:registered_names())]),
 		receive 
@@ -420,7 +439,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						% io:format("StorageProcessesToKill are: ~p~n", [StorageProcessesToKill]),
 						KillMessage = {self(), kill},
 						% io:format("Just prior to sending kill message"),
-						global:sync(),
+						global:sync(), % TODO Not sure if needed
 						% io:format("State of our global registry table is: ~p~n", [global:registered_names()]),
 						lists:map(fun(X) -> global:send(X, KillMessage) end, StorageProcessesToKill);
 						% io:format("Survived the kill message-sending"); % kill all storage processes
@@ -431,6 +450,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				if
 				 	CurrentNodeID == DestinationNodeNum -> % table meant for us. Spawn a process and register
 				 										   % it as the official storage table with given ID.
+				 		io:format("Received sendStorageTable, registering with ID: ~p~n", [StorageID]),
 				 		StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
 				 		global:sync(), % TODO maybe not needed?
 				 		SpawnPID = spawn(key_value_node, storage_process_helper, [Table, StorageID]),
@@ -439,6 +459,26 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				 	true -> % not meant for us, forward onwards
 				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTable, Table, DestinationNodeNum, StorageID})
 				 end; 
+			{Pid, makeDuplicate, Table, StorageID} -> % Special case when the second node enters, the first must send
+													   % it all the tables that it should duplicate.
+				% This is received by the second node, who gets the data to duplicate.
+				StorageDupName = lists:concat(["StorageDuplicate", integer_to_list(StorageID)]),
+				SpawnPID = spawn(key_value_node, storage_process_helper, [Table, StorageID]),
+				global:sync(),
+				global:register_name(StorageDupName, SpawnPID);
+			{Pid, requestDuplicates, OtherNodeNum} -> 
+				% Special case where second node to enter must request data for duplicates.
+				% Received by first node, who then has the proper storage processes get their data.
+				StorageProcNumsToDuplicate = calc_storage_processes(CurrentNodeID, OtherNodeNum, NumStorageProcesses-1),
+				StorageProcsToDuplicate = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, StorageProcNumsToDuplicate),
+				RequestDupsMsg = {self(), requestDuplicates, OtherNodeNum, CurrentNodeID},
+				io:format("In requestDuplicates, StorageProcsToDuplicate: ~p~n", [StorageProcsToDuplicate]),
+				lists:map(fun(X) -> global:send(X, RequestDupsMsg) end, StorageProcsToDuplicate);
+			{Pid, sendDuplicateTable, Table, DestinationNodeNum, StorageID} ->
+				% Received by first node from storage process, must forward this table
+				% onto the second node to make a duplicate.
+				DestinationNode = lists:concat(["Node", integer_to_list(DestinationNodeNum)]),
+				global:send(DestinationNode, {self(), makeDuplicate, Table, StorageID});
 			Message -> 
 				io:format("Received some malformed message ~p~n", [Message])
 		end,
@@ -463,6 +503,7 @@ spawn_tables(NumTables) ->
 																	 % TODO VIJAY: and then just spawn with storage_process_helper?
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			register(list_to_atom(SpawnName), SpawnPID), % registers it locally with the node-- so we can access it after it's globally deregistered
+			global:sync(),
 			global:register_name(SpawnName, SpawnPID), % and globally
 			spawn_tables(NumTables-1)
 	end.
