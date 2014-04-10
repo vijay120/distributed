@@ -336,15 +336,19 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				ProspectiveStorageTable = hash(Key, NumStorageProcesses),
 				case is_my_process(CurrentNodeID, ProspectiveStorageTable, NumStorageProcesses) of
 					true -> 
-						io:format("This is true"),
+						io:format("Key is hashble to one of my processes ~n"),
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
 						process_storage_reply_messages(Pid, Ref);
 					false -> 
-						AllMyNeighbors = calc_storage_neighbours(CurrentNodeID, NumStorageProcesses),
+						io:format("key not hashable to any of my processes ~n"),
+						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+						NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+						AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses),
+						AllMyNeighbors = calc_storage_neighbours(AllMyStorageProcesses, NumStorageProcesses),
 						ClosestNeighbor = get_closest_neighbor_node_to_target(AllMyNeighbors, ProspectiveStorageTable, NumStorageProcesses),
-						MakeNeighborName = lists:concat("Node", integer_to_list(ClosestNeighbor)),
+						MakeNeighborName = lists:concat(["Node", integer_to_list(ClosestNeighbor)]),
 						global:send(MakeNeighborName, {Pid, Key, store, Key, Value}),
 						process_messages(NumStorageProcesses, CurrentNodeID)
 				end;
