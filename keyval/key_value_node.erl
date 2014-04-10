@@ -2,6 +2,11 @@
 -export([main/1, storage_process/2, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
+% TODO EOIN: Monitor and deal with leaving node.
+% TODO EOIN: Deregister node on duplicate and reregister.
+% TODO EOIN: Send message for the new node's predecessor to delete its storage table
+%			 duplicates.
+
 % NOTE VIJAY: I made it also take its own process number. 
 % This was so it could respond with it so a new node knows
 % when it receives a table which process it should be registered as.
@@ -21,7 +26,9 @@ storage_process_helper(Table, StorageID) ->
 			end;
 		 {Pid, requestStorageTables, RequestingNodeNum, ParentNodeNum} -> 
 		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
-		 	global:send(ParentNode, {self(), sendStorageTables, Table, RequestingNodeNum, StorageID}); % TODO: Transform our table into a duplicate.
+		 	global:send(ParentNode, {self(), sendStorageTable, Table, RequestingNodeNum, StorageID}); % TODO: Transform our table into a duplicate.
+		 {Pid, kill} -> % Message from our parent node that we no longer need to exist. (So we must have been a duplicate.)
+		 	exit("We no longer need to be duplicating data. ~n");
 		 Message -> 
 		 	io:format("Malformed request ~p~n", [Message])
 	end,
@@ -42,6 +49,7 @@ generate_node_nums(0) -> [0];
 generate_node_nums(NumStorageProcesses) -> 
 	[NumStorageProcesses] ++ generate_node_nums(NumStorageProcesses-1).
 
+%% Lists all powers of 2 from NumStorageProcesses to 1; i.e. [8,4,2,1] if num=8
 list_exponentials(0) -> [];
 list_exponentials(NumStorageProcesses) ->						
 	[NumStorageProcesses] ++ list_exponentials(NumStorageProcesses div 2). % div forces integer division
@@ -84,7 +92,7 @@ calc_storage_neighbours(EnteringStorageProcesses, NumStorageProcesses) ->
 	io:format("ListExps are: ~p~n", [ListExps]),
 	lists:usort(get_storage_neighbours(EnteringStorageProcesses, ListExps, NumStorageProcesses)). % usort removes duplicates
 
-%Get the greatest storage process less than our smallest if it exists;
+% Get the greatest storage process's node less than our smallest if it exists;
 %		otherwise get the highest valued one. (To deal with mod)
 % If the previous node is a neighbour, just go right to it.
 get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses) ->
@@ -153,7 +161,6 @@ send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 	io:format("Sending message to: ~p~n", [ClosestNeighbour]),
 	global:send(ClosestNeighbour, Message).
 
-% TODO: Make sure these are properly handling NumStorageProcesses as 2^m or (2^m)-1.
 hash(Key, NumStorageProcesses) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem NumStorageProcesses.
 
 
@@ -323,16 +330,45 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 							OurStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, OurStorageProcessNums),
 							RequestTablesMessage = {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum}, % Original is the requester, destination node received it.
 							lists:map(fun(X) -> global:send(X, RequestTablesMessage) end, OurStorageProcessNames),
-							io:format("Got the message! We should send the proper storage processes data via global:send ");
+							io:format("Got the message! We should send the proper storage processes data via global:send "), 
+							% Unless the predecessor is the same as the OriginalNode.
+							NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
+							PredNodeNum = get_previous_node(CurrentNodeID, NodesInNetworkList),
+							PredNode = lists:concat(["Node", integer_to_list(PredNodeNum)]),
+							if
+								PredNodeNum == OriginalNodeNum -> % Then we have no duplicates to delete. Case of 2 nodes in network.
+									true;
+								true -> % send message to our predecessor having him delete our duplicates--we become the duplicate.
+									DeleteDuplsMessage = {self(), deleteStorageDuplicates, CurrentNodeID},
+									send_node_message(CurrentNodeID, PredNode, NumStorageProcesses-1, DeleteDuplsMessage)
+							end;
+							% TODO leave the duplicates registered on the node with the same value
+							% TODO tell pred node to delete any duplicates it shouldn't have (it could calculate this using
+							% register, and then kill those)
 					true -> io:format("Not for us! Passing it along to: ~p~n", [DestinationNodeNum]),
 							send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
 				end;
-			{Pid, sendStorageTables, Table, DestinationNodeNum, StorageID} ->
+			{Pid, deleteStorageDuplicates, SuccessorNum} -> 
+				% delete every duplicate storage table we have from SuccessorNum to its successor--kill their processes
+				NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
+				TwoNodesAwayNum = get_next_node(SuccessorNum, NodesInNetworkList),
+				StorageProcessNumsToKill = calc_storage_processes(SuccessorNum, TwoNodesAwayNum, NumStorageProcesses-1),
+				StorageProcessesToKill = lists:map(fun(X) -> list_to_atom(lists:concat(["Storage", integer_to_list(X)])) end, StorageProcessNumsToKill),
+				KillMessage = {self(), kill},
+				lists:map(fun(X) -> X ! KillMessage end, StorageProcessesToKill),
+				% lists:map(fun(X) -> kill(X) end, StorageProcessesToKill), % TODO kill every duplicate process 
+				true;
+			{Pid, sendStorageTable, Table, DestinationNodeNum, StorageID} ->
 				if
 				 	CurrentNodeID == DestinationNodeNum -> % table meant for us
+				 		StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
+				 		global:unregister_name(StorageName), % unregister old one, register new one
+				 		global:sync(),
+				 		SpawnPID = spawn(key_value_node, storage_process, [[], StorageID]),
+				 		global:register_name(StorageName, SpawnPID),
 				 		io:format("Received table with ID: ~p~n", [StorageID]);
 				 	true -> % not meant for us, forward onwards
-				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTables, Table, DestinationNodeNum, StorageID})
+				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTable, Table, DestinationNodeNum, StorageID})
 				 end; 
 			Message -> 
 				io:format("Received some malformed message ~p~n", [Message])
@@ -357,6 +393,7 @@ spawn_tables(NumTables) ->
 			SpawnPID = spawn(key_value_node, storage_process, [[], NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
 																	 % TODO VIJAY: and then just spawn with storage_process_helper?
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
-			global:register_name(SpawnName, SpawnPID),
+			register(list_to_atom(SpawnName), SpawnPID), % registers it locally with the node-- so we can access it after it's globally deregistered
+			global:register_name(SpawnName, SpawnPID), % and globally
 			spawn_tables(NumTables-1)
 	end.
