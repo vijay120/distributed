@@ -1,5 +1,5 @@
 -module(key_value_node).
--export([main/1, storage_process/2, is_my_process/3]).
+-export([main/1, storage_process/1, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
 % TODO EOIN: Monitor and deal with leaving node.
@@ -35,14 +35,10 @@ storage_process_helper(Table, StorageID) ->
 	storage_process_helper(Table, StorageID).
 
 % StorageID is its int value in the global registry table
-storage_process(OldTable, StorageID) -> % TODO change when we use Pid
-	io:format("Storage process recieved something~n"),
-	case OldTable == [] of
-		true -> 
-			Table = ets:new(storage_table, []),
-			storage_process_helper(Table, StorageID);
-		false -> storage_process_helper(OldTable, StorageID)
-	end.
+storage_process(StorageID) -> % TODO change when we use Pid
+	io:format("Storage process received something~n"),
+	Table = ets:new(storage_table, []),
+	storage_process_helper(Table, StorageID).
 
 % Generates all possible node names based on the number of storage processes.
 generate_node_nums(0) -> [0];
@@ -92,19 +88,37 @@ calc_storage_neighbours(EnteringStorageProcesses, NumStorageProcesses) ->
 	io:format("ListExps are: ~p~n", [ListExps]),
 	lists:usort(get_storage_neighbours(EnteringStorageProcesses, ListExps, NumStorageProcesses)). % usort removes duplicates
 
-% Get the greatest storage process's node less than our smallest if it exists;
-%		otherwise get the highest valued one. (To deal with mod)
-% If the previous node is a neighbour, just go right to it.
-get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses) ->
+%If we have a storage process from TargetStorageProcesses as a neighbour, return that
+%	 storage process. Otherwise, return the greatest neighbour less than
+%	 smallest target storage process.
+get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, TargetStorageProcesses, NumStorageProcesses) ->
 	AllNeighboursSorted = lists:sort(AllStorageNeighbours),
-	case lists:member(TargetNodeNum, AllNeighboursSorted) of
-		true -> TargetNodeNum;
-		_Else ->	SmallerNeighbours = lists:filter(fun(X) -> X < SenderNodeNum end, AllStorageNeighbours),
-				if
-					SmallerNeighbours == [] -> lists:last(AllNeighboursSorted);
-					true 					-> lists:last(SmallerNeighbours)
-				end
+	% see if any element in AllStorageNeighbours is in TargetStorageProcesses
+	NeighboursInTarget = lists:filter(fun(X) -> lists:member(X, TargetStorageProcesses) end, AllStorageNeighbours),
+	if
+		NeighboursInTarget == [] -> % filter out neighbours less than the target
+			SmallerNeighbours = lists:filter(fun(X) -> X < TargetNodeNum end, AllStorageNeighbours),
+			if
+				SmallerNeighbours == [] -> 
+					lists:last(AllNeighboursSorted); % if none less, take biggest
+				true ->
+					lists:last(SmallerNeighbours) % otherwise take greatest less than it
+			end;
+		true -> lists:nth(1, NeighboursInTarget) % if we have a neighbour in the target, just pick it
 	end.
+
+get_closest_neighbor_node_to_target(AllStorageNeighbours, TargetStorageNum, NumStorageProcesses) ->
+	AllNeighboursSorted = lists:sort(AllStorageNeighbours),
+	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+	case lists:member(TargetStorageNum, AllNeighboursSorted) of
+		true -> node_from_storage_process(TargetStorageNum, NodesInNetwork);
+		_Else -> 	SmallestNeighborLessThanTarget = lists:filter(fun(X) -> X < TargetStorageNum end, AllStorageNeighbours),
+					if 
+						SmallestNeighborLessThanTarget == [] -> node_from_storage_process(lists:last(AllStorageNeighbours), NodesInNetwork);
+						true								-> lists:last(SmallestNeighborLessThanTarget)
+					end
+	end.
+
 
 % Given a storage process number and list of nodes (as ints), find the node
 % that the storage process is on. It is the greatest node less than the
@@ -125,6 +139,7 @@ node_from_storage_process(StorageProcessNum, NodesInNetwork) ->
 send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
 	NextNodeNum = get_next_node(SenderNodeNum, NodesInNetwork),
+	NextFromTargetNum = get_next_node(TargetNodeNum, NodesInNetwork),
 	% PrevNodeNum = get_previous_node(EnteringNodeNum, NodesInNetwork),
 
 	SenderNode = lists:concat(["Node", integer_to_list(SenderNodeNum)]),
@@ -133,32 +148,39 @@ send_node_message(SenderNodeNum, TargetNodeNum, NumStorageProcesses, Message) ->
 
 	% NOTE: PROCESS
 	% 1. Determine storage processes that should be on the entering node.
-	% 2. Calculate all of these processes' neighbors.
-	% 3. Get the greatest storage process less than our smallest if it exists;
-	%		otherwise get the highest valued one. (To deal with mod)
+	% 1.5. Determine storage processes that should be on the target node.
+	% 2. Calculate all of entering node's processes' neighbors.
+	% 3. If we have a storage process from 1.5 as a neighbour, return that
+	%	 storage process. Otherwise, return the greatest neighbour less than
+	%	 smallest target storage process.
 	% 4. Determine the node that storage process is in.
 	% 5. Send message via global:send to that node.
 
 	% 1.
 	SenderStorageProcesses = calc_storage_processes(SenderNodeNum, NextNodeNum, NumStorageProcesses),% storage processes on our entering node
-	io:format("EnteringStorageProcesses are: ~p~n", [SenderStorageProcesses]),
+	% io:format("EnteringStorageProcesses are: ~p~n", [SenderStorageProcesses]),
+
+	% 1.5.
+	TargetStorageProcesses = calc_storage_processes(TargetNodeNum, NextFromTargetNum, NumStorageProcesses),
+	% io:format("TargetStorageProcesses are: ~p~n", [TargetStorageProcesses]),
 
 	% 2.
 	AllStorageNeighbours = calc_storage_neighbours(SenderStorageProcesses, NumStorageProcesses),
-	io:format("AllStorageNeighbours are: ~p~n", [AllStorageNeighbours]),
+	% io:format("AllStorageNeighbours are: ~p~n", [AllStorageNeighbours]),
 
 	% 3.
-	ClosestStorageNeighbourNum = get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, NumStorageProcesses),
-	io:format("ClosestStorageNeighbourNum is: ~p~n", [ClosestStorageNeighbourNum]),
+	ClosestStorageNeighbourNum = get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbours, TargetStorageProcesses, NumStorageProcesses),
+	% io:format("ClosestStorageNeighbourNum is: ~p~n", [ClosestStorageNeighbourNum]),
 
 	% 4. 
 	ClosestNodeNeighbourNum = node_from_storage_process(ClosestStorageNeighbourNum, NodesInNetwork),
-	io:format("ClosestNodeNeighbourNum is: ~p~n", [ClosestNodeNeighbourNum]),
+	% io:format("ClosestNodeNeighbourNum is: ~p~n", [ClosestNodeNeighbourNum]),
 	
 	ClosestNeighbour = lists:concat(["Node", integer_to_list(ClosestNodeNeighbourNum)]),
 
 	% 5.
 	io:format("Sending message to: ~p~n", [ClosestNeighbour]),
+	io:format("Message is: ~p~n", [Message]),
 	global:send(ClosestNeighbour, Message).
 
 hash(Key, NumStorageProcesses) -> lists:foldl(fun(X, Acc) -> X+Acc end, 0, Key) rem NumStorageProcesses.
@@ -319,13 +341,19 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
 						process_storage_reply_messages(Pid, Ref);
-					false -> io:format("I will deal with this case later")
+					false -> 
+						AllMyNeighbors = calc_storage_neighbours(CurrentNodeID, NumStorageProcesses),
+						ClosestNeighbor = get_closest_neighbor_node_to_target(AllMyNeighbors, ProspectiveStorageTable, NumStorageProcesses),
+						MakeNeighborName = lists:concat("Node", integer_to_list(ClosestNeighbor)),
+						global:send(MakeNeighborName, {Pid, Key, store, Key, Value}),
+						process_messages(NumStorageProcesses, CurrentNodeID)
 				end;
 			{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} ->  % forward along or send to a storage process we own
 				if 
 					CurrentNodeID == DestinationNodeNum -> % send message to storage processes on this node.
 														% receive tables back. Send table via global:send
 														% to OriginalNodeNum.
+							io:format("IN REQUESTSTORAGETABLES"),
 							OurStorageProcessNums = calc_storage_processes(DestinationNodeNum, OriginalNodeNum, NumStorageProcesses-1),
 							OurStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, OurStorageProcessNums),
 							RequestTablesMessage = {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum}, % Original is the requester, destination node received it.
@@ -349,24 +377,25 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 							send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
 				end;
 			{Pid, deleteStorageDuplicates, SuccessorNum} -> 
+				io:format("Got a deleteStorageDuplicates message. Not implemented yet."),
 				% delete every duplicate storage table we have from SuccessorNum to its successor--kill their processes
 				NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
 				TwoNodesAwayNum = get_next_node(SuccessorNum, NodesInNetworkList),
 				StorageProcessNumsToKill = calc_storage_processes(SuccessorNum, TwoNodesAwayNum, NumStorageProcesses-1),
 				StorageProcessesToKill = lists:map(fun(X) -> list_to_atom(lists:concat(["Storage", integer_to_list(X)])) end, StorageProcessNumsToKill),
 				KillMessage = {self(), kill},
-				lists:map(fun(X) -> X ! KillMessage end, StorageProcessesToKill),
+				% lists:map(fun(X) -> X ! KillMessage end, StorageProcessesToKill),
 				% lists:map(fun(X) -> kill(X) end, StorageProcessesToKill), % TODO kill every duplicate process 
 				true;
 			{Pid, sendStorageTable, Table, DestinationNodeNum, StorageID} ->
 				if
 				 	CurrentNodeID == DestinationNodeNum -> % table meant for us
-				 		StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
-				 		global:unregister_name(StorageName), % unregister old one, register new one
-				 		global:sync(),
-				 		SpawnPID = spawn(key_value_node, storage_process, [[], StorageID]),
-				 		global:register_name(StorageName, SpawnPID),
-				 		io:format("Received table with ID: ~p~n", [StorageID]);
+				 		% StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
+				 		% global:unregister_name(StorageName), % unregister old one, register new one
+				 		% global:sync(),
+				 		% SpawnPID = spawn(key_value_node, storage_process, [[], StorageID]),
+				 		% global:register_name(StorageName, SpawnPID),
+				 		io:format("Received table with ID. Not fully implemented yet: ~p~n", [StorageID]);
 				 	true -> % not meant for us, forward onwards
 				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTable, Table, DestinationNodeNum, StorageID})
 				 end; 
@@ -381,7 +410,7 @@ process_storage_reply_messages(OldPid, OldRef) ->
 					io:format("I am exiting with no value"),
 					OldPid ! {OldRef, stored, no_value};
 		{Ref, stored, OldVal} -> 
-					io:format("I am exiting with old value"),
+					io:format("I am exiting with old value ~p", [OldVal]),
 					OldPid ! {OldRef, stored, OldVal}
 	end.
 
@@ -390,7 +419,7 @@ spawn_tables(NumTables) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			SpawnPID = spawn(key_value_node, storage_process, [[], NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
+			SpawnPID = spawn(key_value_node, storage_process, [NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
 																	 % TODO VIJAY: and then just spawn with storage_process_helper?
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			register(list_to_atom(SpawnName), SpawnPID), % registers it locally with the node-- so we can access it after it's globally deregistered
