@@ -1,5 +1,5 @@
 -module(key_value_node).
--export([main/1, storage_process/2, is_my_process/3]).
+-export([main/1, storage_process/1, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
 % NOTE VIJAY: I made it also take its own process number. 
@@ -28,14 +28,10 @@ storage_process_helper(Table, StorageID) ->
 	storage_process_helper(Table, StorageID).
 
 % StorageID is its int value in the global registry table
-storage_process(OldTable, StorageID) -> % TODO change when we use Pid
+storage_process(StorageID) -> % TODO change when we use Pid
 	io:format("Storage process recieved something~n"),
-	case OldTable == [] of
-		true -> 
-			Table = ets:new(storage_table, []),
-			storage_process_helper(Table, StorageID);
-		false -> storage_process_helper(OldTable, StorageID)
-	end.
+	Table = ets:new(storage_table, []),
+	storage_process_helper(Table, StorageID).
 
 % Generates all possible node names based on the number of storage processes.
 generate_node_nums(0) -> [0];
@@ -97,6 +93,19 @@ get_closest_neighbour_to_target(SenderNodeNum, TargetNodeNum, AllStorageNeighbou
 					true 					-> lists:last(SmallerNeighbours)
 				end
 	end.
+
+get_closest_neighbor_node_to_target(AllStorageNeighbours, TargetStorageNum, NumStorageProcesses) ->
+	AllNeighboursSorted = lists:sort(AllStorageNeighbours),
+	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+	case lists:member(TargetStorageNum, AllNeighboursSorted) of
+		true -> node_from_storage_process(TargetStorageNum, NodesInNetwork);
+		_Else -> 	SmallestNeighborLessThanTarget = lists:filter(fun(X) -> X < TargetStorageNum end, AllStorageNeighbours),
+					if 
+						SmallestNeighborLessThanTarget == [] -> node_from_storage_process(lists:last(AllStorageNeighbours), NodesInNetwork);
+						true								-> lists:last(SmallestNeighborLessThanTarget)
+					end
+	end.
+
 
 % Given a storage process number and list of nodes (as ints), find the node
 % that the storage process is on. It is the greatest node less than the
@@ -312,7 +321,12 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value}),
 						process_storage_reply_messages(Pid, Ref);
-					false -> io:format("I will deal with this case later")
+					false -> 
+						AllMyNeighbors = calc_storage_neighbours(CurrentNodeID, NumStorageProcesses),
+						ClosestNeighbor = get_closest_neighbor_node_to_target(AllMyNeighbors, ProspectiveStorageTable, NumStorageProcesses),
+						MakeNeighborName = lists:concat("Node", integer_to_list(ClosestNeighbor)),
+						global:send(MakeNeighborName, {Pid, Key, store, Key, Value}),
+						process_messages(NumStorageProcesses, CurrentNodeID)
 				end;
 			{Pid, requestStorageTables, OriginalNodeNum, DestinationNodeNum} ->  % forward along or send to a storage process we own
 				if 
@@ -345,7 +359,7 @@ process_storage_reply_messages(OldPid, OldRef) ->
 					io:format("I am exiting with no value"),
 					OldPid ! {OldRef, stored, no_value};
 		{Ref, stored, OldVal} -> 
-					io:format("I am exiting with old value"),
+					io:format("I am exiting with old value ~p", [OldVal]),
 					OldPid ! {OldRef, stored, OldVal}
 	end.
 
@@ -354,7 +368,7 @@ spawn_tables(NumTables) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			SpawnPID = spawn(key_value_node, storage_process, [[], NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
+			SpawnPID = spawn(key_value_node, storage_process, [NumTables]), % TODO VIJAY: Couldn't we change [] to ets:new(storage_table, [])
 																	 % TODO VIJAY: and then just spawn with storage_process_helper?
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			global:register_name(SpawnName, SpawnPID),
