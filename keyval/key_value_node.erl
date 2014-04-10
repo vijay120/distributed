@@ -404,6 +404,10 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 									send_node_message(CurrentNodeID, PredNodeNum, NumStorageProcesses-1, DeleteDuplsMessage)
 							end,
 
+							io:format("Entering sleep~n"), % to try and give the above process enough time to finish
+							timer:sleep(1000),			 % killing the old duplicate before the new one registers
+							io:format("Exiting sleep~n"),
+
 							% Then, send a requestStorageTables message to each of our storage nodes
 							% greater than or equal to the value of our successor.
 							% He will unregister as the actual storage table and reregister as the duplicate.
@@ -417,6 +421,8 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 							StorageProcsForSuccessor = calc_storage_processes(OriginalNodeNum, NextNextNode, NumStorageProcesses-1),
 							StorageProcNamesForSuccessor = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, StorageProcsForSuccessor),
 							io:format("StorageProcNamesForSuccessor: ~p~n", [StorageProcNamesForSuccessor]), 
+							global:sync(),
+							io:format("Global table is: ~p~n", [lists:sort(global:registered_names())]),
 							RequestTablesMessage = {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum}, % Original is the requester, destination node received it.
 							lists:map(fun(X) -> global:send(X, RequestTablesMessage) end, StorageProcNamesForSuccessor);
 							
@@ -427,21 +433,24 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 							send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), requestStorageTables, OriginalNodeNum, DestinationNodeNum})
 				end;
 			{Pid, deleteStorageDuplicates, SuccessorNodeNum, DestinationNodeNum} -> 
+				io:format("Received message ~p~n: ", [{Pid, deleteStorageDuplicates, SuccessorNodeNum, DestinationNodeNum}]),
 				if 
 					CurrentNodeID == DestinationNodeNum ->
 						% Then we have to delete our duplicates between our successor and the successor's successor (aka the newly added node).
 						% This is because these duplicates are already on our successor.
-						% io:format("Deleting duplicates ~n"),
+						io:format("Deleting duplicates ~n"),
 						NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
 						TwoNodesAwayNum = get_next_node(SuccessorNodeNum, NodesInNetworkList),
 						StorageProcessNumsToKill = calc_storage_processes(SuccessorNodeNum, TwoNodesAwayNum, NumStorageProcesses-1),
-						StorageProcessesToKill = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, StorageProcessNumsToKill),
+						StorageProcessesToKill = lists:map(fun(X) -> lists:concat(["StorageDuplicate", integer_to_list(X)]) end, StorageProcessNumsToKill),
 						% io:format("StorageProcessesToKill are: ~p~n", [StorageProcessesToKill]),
 						KillMessage = {self(), kill},
 						% io:format("Just prior to sending kill message"),
-						global:sync(), % TODO Not sure if needed
+						global:sync(); % TODO Not sure if needed
+						% TODO: There's some problem with killing things that have already unregistered.
+						%io:format("Killing the following duplicates: ~p~n", [StorageProcessesToKill]),
 						% io:format("State of our global registry table is: ~p~n", [global:registered_names()]),
-						lists:map(fun(X) -> global:send(X, KillMessage) end, StorageProcessesToKill);
+						% lists:map(fun(X) -> global:send(X, KillMessage) end, StorageProcessesToKill);
 						% io:format("Survived the kill message-sending"); % kill all storage processes
 					true -> % forward along, we haven't reached the original's predecessor yet.
 						send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), deleteStorageDuplicates, SuccessorNodeNum, DestinationNodeNum})
