@@ -311,6 +311,43 @@ main(Params) ->
 process_messages(NumStorageProcesses, CurrentNodeID) ->
 		io:format("in process messages"),
 		receive 
+			{Pid, Ref, first_key} ->
+				% gather all your data across your multiple tables
+				
+
+
+				
+				% then msg your nearest neighbor about giving their
+
+
+
+
+
+
+
+			{Pid, Ref, retrieve, Key} -> 
+				%calculate the hash value of key
+				%if hash(key) matches one of our storage processes, then send and retrieve
+				%else, bounce to the nearest neighbour and ask for it!
+				StorageTableToRetrieve = hash(Key, NumStorageProcesses),
+				case is_my_process(CurrentNodeID, StorageTableToRetrieve, NumStorageProcesses) of
+					true -> 
+						io:format("Key is hashble to one of my processes ~n"),
+						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(StorageTableToRetrieve)]),
+						io:format("Storage process is ~p", [ConstructedStorageProcess]),
+						global:send(ConstructedStorageProcess, {self(), make_ref(), retrieve, Key}),
+						process_storage_reply_messages(Pid, Ref);
+					false -> 
+						io:format("key not hashable to any of my processes ~n"),
+						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+						NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+						AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses),
+						AllMyNeighbors = calc_storage_neighbours(AllMyStorageProcesses, NumStorageProcesses),
+						ClosestNeighbor = get_closest_neighbor_node_to_target(AllMyNeighbors, StorageTableToRetrieve, NumStorageProcesses),
+						MakeNeighborName = lists:concat(["Node", integer_to_list(ClosestNeighbor)]),
+						global:send(MakeNeighborName, {Pid, Key, retrieve, Key}),
+						process_messages(NumStorageProcesses, CurrentNodeID)
+				end;
 			{Pid, Ref, store, Key, Value} -> % Insert key-value into a storage process if it fits our hash.
 				io:format("received key: ~p", [Key]),
 				ProspectiveStorageTable = hash(Key, NumStorageProcesses),
@@ -364,7 +401,10 @@ process_storage_reply_messages(OldPid, OldRef) ->
 					OldPid ! {OldRef, stored, no_value};
 		{Ref, stored, OldVal} -> 
 					io:format("I am exiting with old value ~p", [OldVal]),
-					OldPid ! {OldRef, stored, OldVal}
+					OldPid ! {OldRef, stored, OldVal};
+		{Ref, retrieved, Value} ->
+					io:format("Got the retrieved value which is ~p", [Value]),
+					OldPid ! {OldRef, retrieved, Value}
 	end.
 
 
