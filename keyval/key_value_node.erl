@@ -399,23 +399,33 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				NextNodeName = lists:concat(["Node", integer_to_list(NextNodeNum)]),
 				global:send(NextNodeName, {Pid, Ref, self(), snapshot, "Num_Key", AllMyKeys});
 
-			
-
    			{Pid, Ref, OriginalPid, snapshot, Method, AggregatedKeys} ->
    				if self() == OriginalPid -> 
    						if 	Method == "First_Key" ->
-   								Result = lists:nth(1, lists:usort(AggregatedKeys)),
-   								io:format("Result is ~p", [Result]),
-   								Pid ! {Ref, result, Result};
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Result = lists:nth(1, lists:usort(AggregatedKeys)),
+		   								io:format("Result is ~p", [Result]),
+		   								Pid ! {Ref, result, Result}
+		   						end;
    							Method == "Last_Key" ->
-   								Length = length(AggregatedKeys),
-   								Result = lists:nth(Length, lists:usort(AggregatedKeys)),
-   								io:format("Result is ~p", [Result]),
-   								Pid ! {Ref, result, Result};
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Length = length(AggregatedKeys),
+		   								Result = lists:nth(Length, lists:usort(AggregatedKeys)),
+		   								io:format("Result is ~p", [Result]),
+		   								Pid ! {Ref, result, Result}
+		   						end;
    							Method == "Num_Key" ->
-   								Length = length(AggregatedKeys),
-   								io:format("Result is ~p", [Length]),
-   								Pid ! {Ref, result, Length};
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Length = length(AggregatedKeys),
+		   								io:format("Result is ~p", [Length]),
+		   								Pid ! {Ref, result, Length}
+		   						end;
    							true -> io:format("I dont know what you're talking about")
    						end;
    					true -> 
