@@ -13,6 +13,7 @@ storage_process(Table, StorageID, NumStorageProcesses) ->
 				[{Key, OldVal}] -> 	io:format("I am not empty"),
 									ets:insert(Table, {Key, Value}), 
 									Pid ! {Ref, stored, OldVal, OrigSenderPid, OrigSenderRef} % These have to be banged back the way, I think.
+									
 			end;
 
 		{Pid, Ref, retrieve, Key} ->
@@ -375,6 +376,11 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 		OrigGlobalTable = lists:sort(global:registered_names()),
 		io:format("The state of the global table is: ~p~n", [OrigGlobalTable]),
 		receive 
+
+			{Pid, Ref, node_list} ->
+				NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+				Pid ! {Ref, result, NodesInNetwork};
+
 			{Pid, Ref, first_key} ->
 				% gather all your data across your multiple tables
 				NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
