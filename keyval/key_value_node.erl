@@ -14,6 +14,15 @@ storage_process(Table, StorageID) ->
 									ets:insert(Table, {Key, Value}), 
 									Pid ! {Ref, stored, OldVal, OrigSenderPid, OrigSenderRef} % These have to be banged back the way, I think.
 			end;
+
+		{Pid, Ref, retrieve, Key} ->
+			case ets:lookup(Table, Key) of
+				[] -> 	io:format("I am empty"),
+						Pid ! {Ref, retrieved, no_value}; % These have to be banged back the way, I think.
+				[{Key, Value}] -> 	io:format("I am not empty"),
+									Pid ! {Ref, retrieved, Value} % These have to be banged back the way, I think.
+			end;
+
 		 {Pid, requestStorageTables, RequestingNodeNum, ParentNodeNum} -> 
 		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
 		 	StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
@@ -449,7 +458,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						io:format("Key is hashble to one of my processes ~n"),
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(StorageTableToRetrieve)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
-						global:send(ConstructedStorageProcess, {self(), make_ref(), retrieve, Key});
+						global:send(ConstructedStorageProcess, {Pid, Ref, retrieve, Key});
 						% process_messages(NumStorageProcesses, CurrentNodeID);
 					false -> 
 						io:format("key not hashable to any of my processes ~n"),
