@@ -1,5 +1,5 @@
 -module(key_value_node).
--export([main/1, storage_process/3, is_my_process/3]).
+-export([main/1, storage_process_init/3, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
 storage_process(Table, StorageID, NumStorageProcesses) ->
@@ -26,13 +26,20 @@ storage_process(Table, StorageID, NumStorageProcesses) ->
 		 	global:unregister_name(DuplicateName),
 		 	global:register_name(DuplicateName, self()),
 		 	global:sync(),
-		 	global:send(ParentNode, {self(), sendStorageTable, Table, RequestingNodeNum, StorageID});
+		 	TableList = ets:tab2list(Table),
+		 	global:send(ParentNode, {self(), sendStorageTable, TableList, RequestingNodeNum, StorageID});
+
+		{Pid, requestStorageTablesSnapshot} ->
+		 	TableList = ets:tab2list(Table),
+		 	Pid ! {self(), sendStorageTable, TableList};		
+
 		 {Pid, kill} -> % Message from our parent node that we no longer need to exist. (So we must have been a duplicate.)
 		 	io:format("Received kill message. ~n"),
 		 	exit("We no longer need to be duplicating data. ~n");
 		 {Pid, requestDuplicates, RequestingNodeNum, ParentNodeNum} -> % Sends our table as a duplicate.
 		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
-		 	global:send(ParentNode, {self(), sendDuplicateTable, Table, RequestingNodeNum, StorageID});
+		 	TableList = ets:tab2list(Table),
+		 	global:send(ParentNode, {self(), sendDuplicateTable, TableList, RequestingNodeNum, StorageID});
 		 {Pid, makeOfficial} ->
 		 	StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
 		 	StorageDupName = lists:concat(["StorageDuplicate", integer_to_list(StorageID)]),
@@ -52,6 +59,14 @@ storage_process(Table, StorageID, NumStorageProcesses) ->
 		 	io:format("Malformed request ~p~n", [Message])
 	end,
 	storage_process(Table, StorageID, NumStorageProcesses).
+
+storage_process_init(TableList, StorageID, NumStorageProcesses) ->
+	NewTable = ets:new(storage_table, []),
+	if TableList == [] ->
+				 	storage_process(NewTable, StorageID, NumStorageProcesses);
+		true -> 	lists:foldl(fun(X, _) -> ets:insert(NewTable, X) end, [], TableList),
+					storage_process(NewTable, StorageID, NumStorageProcesses)
+	end.
 
 % % StorageID is its int value in the global registry table
 % storage_process(StorageID) -> % TODO change when we use Pid
@@ -345,6 +360,19 @@ main(Params) ->
 		end,
 		halt().
 
+request_and_response_for_storage_table(Pid, NodeID, StorageID) ->
+	io:format("In request response ~p", [StorageID]),
+	global:send(StorageID, {self(), requestStorageTablesSnapshot}),
+	receive
+		{NewPid, sendStorageTable, TableList} -> lists:foldl(fun(X,Acc) -> lists:append([element(1,X)], Acc) end, [], TableList)
+	end.
+
+process_table_response(AllMyStorageProcesses, Pid, NodeID) ->
+	lists:foldl(fun(X, Accin) -> 	StorageID = lists:concat(["Storage", X]), 
+								lists:append(request_and_response_for_storage_table(Pid, NodeID, StorageID), Accin) end,
+								[], AllMyStorageProcesses).
+
+
 % Handle any message into the non-storage process for a node.
 process_messages(NumStorageProcesses, CurrentNodeID) ->
 		global:sync(),
@@ -352,6 +380,97 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 		OrigGlobalTable = lists:sort(global:registered_names()),
 		io:format("The state of the global table is: ~p~n", [OrigGlobalTable]),
 		receive 
+			{Pid, Ref, first_key} ->
+				% gather all your data across your multiple tables
+				NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+				NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+				AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses-1),
+				AllMyKeys = process_table_response(AllMyStorageProcesses, Pid, CurrentNodeID),
+				% then msg your nearest neighbor about giving their
+				NextNodeName = lists:concat(["Node", integer_to_list(NextNodeNum)]),
+				global:send(NextNodeName, {Pid, Ref, self(), snapshot, "First_Key", AllMyKeys});
+
+			{Pid, Ref, last_key} ->
+				% gather all your data across your multiple tables
+				NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+				NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+				AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses-1),
+				AllMyKeys = process_table_response(AllMyStorageProcesses, Pid, CurrentNodeID),
+				% then msg your nearest neighbor about giving their
+				NextNodeName = lists:concat(["Node", integer_to_list(NextNodeNum)]),
+				global:send(NextNodeName, {Pid, Ref, self(), snapshot, "Last_Key", AllMyKeys});
+
+			{Pid, Ref, num_keys} ->
+				% gather all your data across your multiple tables
+				NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+				NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+				AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses-1),
+				AllMyKeys = process_table_response(AllMyStorageProcesses, Pid, CurrentNodeID),
+				% then msg your nearest neighbor about giving their
+				NextNodeName = lists:concat(["Node", integer_to_list(NextNodeNum)]),
+				global:send(NextNodeName, {Pid, Ref, self(), snapshot, "Num_Key", AllMyKeys});
+
+   			{Pid, Ref, OriginalPid, snapshot, Method, AggregatedKeys} ->
+   				if self() == OriginalPid -> 
+   						if 	Method == "First_Key" ->
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Result = lists:nth(1, lists:usort(AggregatedKeys)),
+		   								io:format("Result is ~p", [Result]),
+		   								Pid ! {Ref, result, Result}
+		   						end;
+   							Method == "Last_Key" ->
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Length = length(AggregatedKeys),
+		   								Result = lists:nth(Length, lists:usort(AggregatedKeys)),
+		   								io:format("Result is ~p", [Result]),
+		   								Pid ! {Ref, result, Result}
+		   						end;
+   							Method == "Num_Key" ->
+   								case AggregatedKeys of 
+   									[] -> Pid ! {Ref, result, []};
+   									_Else -> 
+		   								Length = length(AggregatedKeys),
+		   								io:format("Result is ~p", [Length]),
+		   								Pid ! {Ref, result, Length}
+		   						end;
+   							true -> io:format("I dont know what you're talking about")
+   						end;
+   					true -> 
+	   					% gather all your data across your multiple tables
+						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+						NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
+						AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses-1),
+						AllMyKeys = process_table_response(AllMyStorageProcesses, Pid, CurrentNodeID),
+						AggregatedKeysWithMine = lists:append(AggregatedKeys, AllMyKeys),
+						NextNodeName = lists:concat(["Node", integer_to_list(NextNodeNum)]),
+						global:send(NextNodeName, {Pid, Ref, OriginalPid, snapshot, Method, AggregatedKeysWithMine})
+					end;
+
+			{Pid, Ref, retrieve, Key} -> 
+				%calculate the hash value of key
+				%if hash(key) matches one of our storage processes, then send and retrieve
+				%else, bounce to the nearest neighbour and ask for it!
+				StorageTableToRetrieve = hash(Key, NumStorageProcesses),
+				case is_my_process(CurrentNodeID, StorageTableToRetrieve, NumStorageProcesses) of
+					true -> 
+						io:format("Key is hashable to one of my processes ~n"),
+						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(StorageTableToRetrieve)]),
+						io:format("Storage process is ~p", [ConstructedStorageProcess]),
+						global:send(ConstructedStorageProcess, {self(), make_ref(), retrieve, Key});
+						% process_messages(NumStorageProcesses, CurrentNodeID);
+					false -> 
+						io:format("key not hashable to any of my processes ~n"),
+						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+						RetrieveMsg = {Pid, Key, retrieve, Key},
+						TargetNode = node_from_storage_process(StorageTableToRetrieve, NodesInNetwork),
+						send_node_message(CurrentNodeID, TargetNode, NumStorageProcesses-1, RetrieveMsg)
+
+						% process_messages(NumStorageProcesses, CurrentNodeID)
+				end;
 			{Pid, Ref, store, Key, Value} -> % Insert key-value into a storage process if it fits our hash.
 				io:format("received key: ~p", [Key]),
 				ProspectiveStorageTable = hash(Key, NumStorageProcesses),
@@ -364,12 +483,9 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 					false -> 
 						io:format("key not hashable to any of my processes ~n"),
 						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses-1),
-						NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
-						AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses),
-						AllMyNeighbors = calc_storage_neighbours(AllMyStorageProcesses, NumStorageProcesses),
-						ClosestNeighbor = get_closest_neighbor_node_to_target(AllMyNeighbors, ProspectiveStorageTable, NumStorageProcesses),
-						MakeNeighborName = lists:concat(["Node", integer_to_list(ClosestNeighbor)]),
-						global:send(MakeNeighborName, {Pid, Ref, store, Key, Value})
+						StoreMsg = {Pid, Key, store, Key, Value},
+						TargetNode = node_from_storage_process(ProspectiveStorageTable, NodesInNetwork),
+						send_node_message(CurrentNodeID, TargetNode, NumStorageProcesses-1, StoreMsg)
 				end;
 			{Ref, stored, no_value, OldPid, OldRef} -> 
 					io:format("Confirming store operation ~n"),
@@ -441,24 +557,24 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 					true -> % forward along, we haven't reached the original's predecessor yet.
 						send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), deleteStorageDuplicates, SuccessorNodeNum, DestinationNodeNum})
 				end;
-			{Pid, sendStorageTable, Table, DestinationNodeNum, StorageID} ->
+			{Pid, sendStorageTable, TableList, DestinationNodeNum, StorageID} ->
 				if
 				 	CurrentNodeID == DestinationNodeNum -> % table meant for us. Spawn a process and register
 				 										   % it as the official storage table with given ID.
 				 		io:format("Received sendStorageTable, registering with ID: ~p~n", [StorageID]),
 				 		StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
-				 		global:sync(),
-				 		SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID, NumStorageProcesses-1]),
+				 		global:sync(), % TODO maybe not needed?
+				 		SpawnPID = spawn(key_value_node, storage_process_init, [TableList, StorageID, NumStorageProcesses-1]),
 				 		global:register_name(StorageName, SpawnPID), % register as the new official node
 				 		io:format("Received new storage table: ~p~n", [StorageID]);
 				 	true -> % not meant for us, forward onwards
-				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTable, Table, DestinationNodeNum, StorageID})
+				 		send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {self(), sendStorageTable, TableList, DestinationNodeNum, StorageID})
 				 end; 
-			{Pid, makeDuplicate, Table, StorageID} -> % Special case when the second node enters, the first must send
-													   % it all the tables that it should duplicate.
+			{Pid, makeDuplicate, TableList, StorageID} -> 	% Special case when the second node enters, the first must send
+													   		% it all the tables that it should duplicate.
 				% This is received by the second node, who gets the data to duplicate.
 				StorageDupName = lists:concat(["StorageDuplicate", integer_to_list(StorageID)]),
-				SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID, NumStorageProcesses-1]),
+				SpawnPID = spawn(key_value_node, storage_process_init, [TableList, StorageID, NumStorageProcesses-1]),
 				global:sync(),
 				global:register_name(StorageDupName, SpawnPID);
 			{Pid, requestDuplicates, PredNodeNum} ->
@@ -469,11 +585,11 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				RequestDupsMsg = {self(), requestDuplicates, PredNodeNum, CurrentNodeID},
 				io:format("In requestDuplicates, StorageProcsToDuplicate: ~p~n", [StorageProcsToDuplicate]),
 				lists:map(fun(X) -> global:send(X, RequestDupsMsg) end, StorageProcsToDuplicate);
-			{Pid, sendDuplicateTable, Table, DestinationNodeNum, StorageID} ->
+			{Pid, sendDuplicateTable, TableList, DestinationNodeNum, StorageID} ->
 				% Received by first node from storage process, must forward this table
 				% onto the second node to make a duplicate.
 				DestinationNode = lists:concat(["Node", integer_to_list(DestinationNodeNum)]),
-				global:send(DestinationNode, {self(), makeDuplicate, Table, StorageID}); % TODO should use send_node_message
+				global:send(DestinationNode, {self(), makeDuplicate, TableList, StorageID});
 			{Pid, leave} -> % Sent from our storage process by the outside world to leave
 				exit("We were told to leave.");
 			{nodedown, Node} ->
@@ -554,8 +670,8 @@ spawn_tables(NumTables, NumStorageProcesses) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			SpawnPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables, NumStorageProcesses]), 
-			SpawnDupPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables, NumStorageProcesses]),
+			SpawnPID = spawn(key_value_node, storage_process_init, [[], NumTables, NumStorageProcesses]), 
+			SpawnDupPID = spawn(key_value_node, storage_process_init, [[], NumTables, NumStorageProcesses]),
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			SpawnDupName = lists:concat(["StorageDuplicate", integer_to_list(NumTables)]), % register all duplicates on same node at first.
 			register(list_to_atom(SpawnName), SpawnPID), % registers it locally with the node-- so we can access it after it's globally deregistered
