@@ -14,6 +14,15 @@ storage_process(Table, StorageID, NumStorageProcesses) ->
 									ets:insert(Table, {Key, Value}), 
 									Pid ! {Ref, stored, OldVal, OrigSenderPid, OrigSenderRef} % These have to be banged back the way, I think.
 			end;
+
+		{Pid, Ref, retrieve, Key} ->
+			case ets:lookup(Table, Key) of
+				[] -> 	io:format("I am empty"),
+						Pid ! {Ref, retrieved, no_value}; % These have to be banged back the way, I think.
+				[{Key, Value}] -> 	io:format("I am not empty"),
+									Pid ! {Ref, retrieved, Value} % These have to be banged back the way, I think.
+			end;
+
 		 {Pid, requestStorageTables, RequestingNodeNum, ParentNodeNum} -> 
 		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
 		 	StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
@@ -83,20 +92,6 @@ generate_node_nums(NumStorageProcesses) ->
 list_exponentials(0) -> [];
 list_exponentials(NumStorageProcesses) ->						
 	[NumStorageProcesses] ++ list_exponentials(NumStorageProcesses div 2). % div forces integer division
-
-% get_closest_neighbour_to_prev(EnteringNodeNum, PrevNodeNum, NodesInNetwork, NumStorageProcesses) ->
-% 	% generate all neighbors to EnteringNodeNum mod NumStorageProcesses.
-% 	% If PrevNodeNum is in this list, return it.
-% 	% Otherwise, return the greatest node num less than PrevNodeNum.
-% 	% If no such value exists, return the greatest valued node neighbor.+1 needed because before we made it 2^m-1
-% 	ListExps = list_exponentials((NumStorageProcesses+1) div 2), % generates 1,2,4,8...NumStorageProcesses/2
-% 	io:format("ListExps is: ~p~n", [ListExps]),
-% 	PossibleNeighbours = lists:map(fun(X) -> (X + EnteringNodeNum) rem NumStorageProcesses end, ListExps),
-% 	io:format("PossibleNeighbours are: ~p~n", [PossibleNeighbours]),
-% 	NeighboursInNetwork = lists:filter(fun(X) -> lists:member(X, NodesInNetwork) end, PossibleNeighbours),
-% 	io:format("The neighbors in the network are: ~p~n", [NeighboursInNetwork]),
-% 	get_previous_node(EnteringNodeNum, NeighboursInNetwork).
-
 
 % Given an entering node number and the next node number, returns a list of all storage processes
 % numbered between the two. Is kind of complicated due to wrap-around on mod.
@@ -460,7 +455,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						io:format("Key is hashable to one of my processes ~n"),
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(StorageTableToRetrieve)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
-						global:send(ConstructedStorageProcess, {self(), make_ref(), retrieve, Key});
+						global:send(ConstructedStorageProcess, {Pid, Ref, retrieve, Key});
 						% process_messages(NumStorageProcesses, CurrentNodeID);
 					false -> 
 						io:format("key not hashable to any of my processes ~n"),
@@ -653,17 +648,6 @@ is_between(LowerBoundNum, UpperBoundNum, NodeNum, NumStorageProcesses) ->
 	% Then see if NodeNum is in that list
 	ListNumbers = calc_storage_processes(LowerBoundNum, UpperBoundNum, NumStorageProcesses),
 	lists:member(NodeNum, ListNumbers).
-
-
-% process_storage_reply_messages(OldPid, OldRef) ->
-% 	receive
-% 		{Ref, stored, no_value} -> 
-% 					io:format("I am exiting with no value"),
-% 					OldPid ! {OldRef, stored, no_value};
-% 		{Ref, stored, OldVal} -> 
-% 					io:format("I am exiting with old value ~p", [OldVal]),
-% 					OldPid ! {OldRef, stored, OldVal}
-% 	end.
 
 % Spawn tables and their duplicates, and register both appropriately.
 spawn_tables(NumTables, NumStorageProcesses) ->
