@@ -10,3 +10,47 @@ making sure the process worked correctly.
 
 (For example, by adding new nodes, sending messages
 from the outside world to insert, leave, etc.)
+
+We tested node addition/deletion and rebalancing by ssh'ing into a number of machines
+(up to 8 at a time) and then making sure nothing crashed or went awry when sending
+leave messages, or when adding a node (even re-adding a node). 
+
+We attempted to test node addition/deletion in combination with key insertion
+and snapshots and realized that something was going wrong in the rebalancing
+stage. We are losing data, though we do not seem to be losing any of the
+particular storage tables. We think that is currently a problem with how data is
+being duplicated.
+
+We mostly stress tested, with sample output as follows:
+
+We did this to test store, retrieve, num_keys, last_key, first_key in
+the system. We used flush() to see the output of our tests.
+
+(enuge@knuth)14> net_kernel:connect(node1@arden).                      
+true
+(enuge@knuth)15> global:send("Storage14", {self(), make_ref(), leave}).
+<6638.152.0>
+(enuge@knuth)16> {node, node1@arden} ! {self(), make_ref(), store, "cat", "dog"}.
+{<0.38.0>,#Ref<0.0.0.886>,store,"cat","dog"}
+(enuge@knuth)17> {node, node1@arden} ! {self(), make_ref(), store, "bull", "dog"}.
+{<0.38.0>,#Ref<0.0.0.890>,store,"bull","dog"}
+(enuge@knuth)18> {node, node1@arden} ! {self(), make_ref(), store, "turd", "dog"}.
+{<0.38.0>,#Ref<0.0.0.894>,store,"turd","dog"}
+(enuge@knuth)19> {node, node1@arden} ! {self(), make_ref(), store, "red", "dog"}. 
+{<0.38.0>,#Ref<0.0.0.898>,store,"red","dog"}
+(enuge@knuth)20> {node, node1@arden} ! {self(), make_ref(), store, "hurt", "dog"}.
+{<0.38.0>,#Ref<0.0.0.902>,store,"hurt","dog"}
+(enuge@knuth)21> {node, node1@arden} ! {self(), make_ref(), store, "key", "dog"}. 
+{<0.38.0>,#Ref<0.0.0.906>,store,"key","dog"}
+(enuge@knuth)22> {node, node1@arden} ! {self(), make_ref(), store, "woot", "dog"}.
+{<0.38.0>,#Ref<0.0.0.910>,store,"woot","dog"}
+(enuge@knuth)23> {node, node1@arden} ! {self(), make_ref(), num_keys}.          {<0.38.0>,#Ref<0.0.0.914>,num_keys}
+(enuge@knuth)24> flush().
+Shell got {"cat",stored,no_value}
+Shell got {"bull",stored,no_value}
+Shell got {"turd",stored,no_value}
+Shell got {"red",stored,no_value}
+Shell got {#Ref<0.0.0.902>,stored,no_value}
+Shell got {"key",stored,no_value}
+Shell got {"woot",stored,no_value}
+Shell got {#Ref<0.0.0.914>,result,7}
