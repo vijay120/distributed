@@ -14,7 +14,13 @@ storage_process(Table, StorageID, NumStorageProcesses) ->
 									ets:insert(Table, {Key, Value}), 
 									Pid ! {Ref, stored, OldVal, OrigSenderPid, OrigSenderRef} % These have to be banged back the way, I think.
 			end;
-
+		% {Pid, Ref, storeDuplicate, Key, Value} -> 
+		% 	case ets:lookup(Table, Key) of
+		% 		[] -> 	io:format("I am empty"),
+		% 				ets:insert(Table, {Key, Value});
+		% 		[{Key, OldVal}] -> 	io:format("I am not empty"),
+		% 							ets:insert(Table, {Key, Value})
+		% 	end;
 		{Pid, Ref, retrieve, Key} ->
 			case ets:lookup(Table, Key) of
 				[] -> 	io:format("I am empty"),
@@ -476,6 +482,11 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value, Pid, Ref});
+
+						% NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses-1),
+						% PredecessorNodeNum = get_previous_node(CurrentNodeID, NodesInNetworkList),
+						% StoreDupMsg = {Pid, Ref, storeDuplicate, Key, Value, PredecessorNodeNum},
+						% send_node_message(CurrentNodeID, PredecessorNodeNum, NumStorageProcesses-1, StoreDupMsg);
 					false -> 
 						io:format("key not hashable to any of my processes ~n"),
 						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses-1),
@@ -483,6 +494,15 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						TargetNode = node_from_storage_process(ProspectiveStorageTable, NodesInNetwork),
 						send_node_message(CurrentNodeID, TargetNode, NumStorageProcesses-1, StoreMsg)
 				end;
+			% {Pid, Ref, storeDuplicate, Key, Value, DestinationNodeNum} ->
+			% 	if
+			% 		CurrentNodeID == DestinationNodeNum ->
+			% 			StorageDuplicateNum = hash(Key, NumStorageProcesses),
+			% 			StorageDuplicateName = lists:concat(["StorageDuplicate", integer_to_list(StorageDuplicateNum)]),
+			% 			global:send(StorageDuplicateName, {self(), make_ref(), storeDuplicate, Key, Value});
+			% 		true ->
+			% 			send_node_message(CurrentNodeID, DestinationNodeNum, NumStorageProcesses-1, {Pid, Ref, storeDuplicate, Key, Value, DestinationNodeNum})
+			% 	end;
 			{Ref, stored, no_value, OldPid, OldRef} -> 
 					io:format("Confirming store operation ~n"),
 					OldPid ! {OldRef, stored, no_value};
