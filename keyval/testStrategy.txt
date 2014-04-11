@@ -1,0 +1,12 @@
+Names: Eoin Nugent and Vijay Ramakrishnan
+
+We were short on time (and just trying to meet the deadline), so our testing was
+on an ad-hoc basis as we went. We had split the implementation duties
+roughly along the lines of rebalancing the nodes and implementing
+the key-value insertion/lookup/snapshot functionality. Therefore,
+we each tested them in turn as we went, and then made sure they
+worked in tandem via ssh'ing into a number of machine and
+making sure the process worked correctly.
+
+(For example, by adding new nodes, sending messages
+from the outside world to insert, leave, etc.)

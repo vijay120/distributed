@@ -1,9 +1,9 @@
 -module(key_value_node).
--export([main/1, storage_process/2, is_my_process/3]).
+-export([main/1, storage_process/3, is_my_process/3]).
 -define(TIMEOUT, 2000).
 
-% TODO EOIN: Monitor and deal with leaving node.
-storage_process(Table, StorageID) ->
+storage_process(Table, StorageID, NumStorageProcesses) ->
+	io:format("FOR TESTING: My Pid is: ~p~n", [self()]),
 	receive 
 		{Pid, Ref, store, Key, Value, OrigSenderPid, OrigSenderRef} -> 
 			case ets:lookup(Table, Key) of
@@ -33,10 +33,25 @@ storage_process(Table, StorageID) ->
 		 {Pid, requestDuplicates, RequestingNodeNum, ParentNodeNum} -> % Sends our table as a duplicate.
 		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
 		 	global:send(ParentNode, {self(), sendDuplicateTable, Table, RequestingNodeNum, StorageID});
+		 {Pid, makeOfficial} ->
+		 	StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
+		 	StorageDupName = lists:concat(["StorageDuplicate", integer_to_list(StorageID)]),
+
+		 	global:sync(), % Unregister as duplicate, make ours official.
+		 	global:unregister_name(StorageDupName),
+		 	global:unregister_name(StorageName),
+		 	global:register_name(StorageName, self()),
+		 	global:sync();
+		 {Pid, Ref, leave} -> % sent by the outside world; tell our parent node to leave
+		 	io:format("Received message to leave~n"),
+		 	NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+		 	ParentNodeNum = node_from_storage_process(StorageID, NodesInNetwork),
+		 	ParentNode = lists:concat(["Node", integer_to_list(ParentNodeNum)]),
+		 	global:send(ParentNode, {self(), leave});
 		 Message -> 
 		 	io:format("Malformed request ~p~n", [Message])
 	end,
-	storage_process(Table, StorageID).
+	storage_process(Table, StorageID, NumStorageProcesses).
 
 % % StorageID is its int value in the global registry table
 % storage_process(StorageID) -> % TODO change when we use Pid
@@ -299,13 +314,6 @@ enter_network(NodeInNetwork, NumStorageProcesses) ->
 	send_node_message(RandomFreeNodeNum, PreviousNodeNum, NumStorageProcesses, RequestStorageTablesMsg), % send a message from RandomFreeNode to
 																  % previous node requesting all
 																  % storage processes from r to next.
-	
-
-	% NextNodePid = global:whereis_name(NextNode),
-	% PreviousNodePid = global:whereis_name(PreviousNode),
-	% monitor_node(node(NextNodePid), true),
-	% monitor_node(node(PreviousNodePid), true),
-
 
 	RandomFreeNodeNum. % do things before registering us.
 
@@ -323,13 +331,15 @@ main(Params) ->
 			2 -> GlobalNodeName = lists:concat(["Node", integer_to_list(0)]),
 				 CurrentNodeID = 0,
 				 DoesRegister = global:register_name(GlobalNodeName, self()),
+				 net_kernel:monitor_nodes(true), % monitor all nodes.
 				 io:format("Does it register? ~p~n", [DoesRegister]),	
-				 spawn_tables(NumStorageProcesses-1),
+				 spawn_tables(NumStorageProcesses-1, NumStorageProcesses-1),
 				 GlobalTable = global:registered_names(),
 				 io:format("Registered table is: ~p~n", [GlobalTable]),
 				 process_messages(NumStorageProcesses, CurrentNodeID);
 			3 -> NodeInNetwork = list_to_atom(hd(tl(tl(Params)))), % third parameter
 				 OurNodeNum = enter_network(NodeInNetwork, NumStorageProcesses-1),
+				 net_kernel:monitor_nodes(true), % monitor all nodes
 				 process_messages(NumStorageProcesses, OurNodeNum);
 			_Else -> io:format("Error: bad arguments (too few or too many) ~n")
 		end,
@@ -339,7 +349,8 @@ main(Params) ->
 process_messages(NumStorageProcesses, CurrentNodeID) ->
 		global:sync(),
 		io:format("in process messages ~n"),
-		io:format("The state of the global table is: ~p~n", [lists:sort(global:registered_names())]),
+		OrigGlobalTable = lists:sort(global:registered_names()),
+		io:format("The state of the global table is: ~p~n", [OrigGlobalTable]),
 		receive 
 			{Pid, Ref, store, Key, Value} -> % Insert key-value into a storage process if it fits our hash.
 				io:format("received key: ~p", [Key]),
@@ -350,10 +361,9 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						ConstructedStorageProcess = lists:concat(["Storage", integer_to_list(ProspectiveStorageTable)]),
 						io:format("Storage process is ~p", [ConstructedStorageProcess]),
 						global:send(ConstructedStorageProcess, {self(), make_ref(), store, Key, Value, Pid, Ref});
-						 % TODO VIJAY I made this stay in here and passed extra info to the storage process
 					false -> 
 						io:format("key not hashable to any of my processes ~n"),
-						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses),
+						NodesInNetwork = find_all_nodes(0, [], NumStorageProcesses-1),
 						NextNodeNum = get_next_node(CurrentNodeID, NodesInNetwork),
 						AllMyStorageProcesses = calc_storage_processes(CurrentNodeID, NextNodeNum, NumStorageProcesses),
 						AllMyNeighbors = calc_storage_neighbours(AllMyStorageProcesses, NumStorageProcesses),
@@ -374,7 +384,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 														% to OriginalNodeNum.
 
 							% First, delete the former duplicates on our predecessor.
-							NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
+							NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses-1),
 							PredNodeNum = get_previous_node(CurrentNodeID, NodesInNetworkList),
 							PredNode = lists:concat(["Node", integer_to_list(PredNodeNum)]),
 							io:format("PredNodeNum, OriginalNodeNum, CurrentNodeID: [~p,~p,~p] ~n", [PredNodeNum, OriginalNodeNum, CurrentNodeID]),
@@ -415,7 +425,7 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 						% Then we have to delete our duplicates between our successor and the successor's successor (aka the newly added node).
 						% This is because these duplicates are already on our successor.
 						io:format("Deleting duplicates ~n"),
-						NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
+						NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses-1),
 						TwoNodesAwayNum = get_next_node(SuccessorNodeNum, NodesInNetworkList),
 						StorageProcessNumsToKill = calc_storage_processes(SuccessorNodeNum, TwoNodesAwayNum, NumStorageProcesses-1),
 						StorageProcessesToKill = lists:map(fun(X) -> lists:concat(["StorageDuplicate", integer_to_list(X)]) end, StorageProcessNumsToKill),
@@ -437,8 +447,8 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 				 										   % it as the official storage table with given ID.
 				 		io:format("Received sendStorageTable, registering with ID: ~p~n", [StorageID]),
 				 		StorageName = lists:concat(["Storage", integer_to_list(StorageID)]),
-				 		global:sync(), % TODO maybe not needed?
-				 		SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID]),
+				 		global:sync(),
+				 		SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID, NumStorageProcesses-1]),
 				 		global:register_name(StorageName, SpawnPID), % register as the new official node
 				 		io:format("Received new storage table: ~p~n", [StorageID]);
 				 	true -> % not meant for us, forward onwards
@@ -448,26 +458,86 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 													   % it all the tables that it should duplicate.
 				% This is received by the second node, who gets the data to duplicate.
 				StorageDupName = lists:concat(["StorageDuplicate", integer_to_list(StorageID)]),
-				SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID]),
+				SpawnPID = spawn(key_value_node, storage_process, [Table, StorageID, NumStorageProcesses-1]),
 				global:sync(),
 				global:register_name(StorageDupName, SpawnPID);
 			{Pid, requestDuplicates, PredNodeNum} ->
-				NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses),
+				NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses-1),
 				SuccessorNodeNum = get_next_node(CurrentNodeID, NodesInNetworkList),
 				StorageProcNumsToDuplicate = calc_storage_processes(CurrentNodeID, SuccessorNodeNum, NumStorageProcesses-1),
 				StorageProcsToDuplicate = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, StorageProcNumsToDuplicate),
-				RequestDupsMsg = {self(), requestDuplicates, SuccessorNodeNum, CurrentNodeID},
+				RequestDupsMsg = {self(), requestDuplicates, PredNodeNum, CurrentNodeID},
 				io:format("In requestDuplicates, StorageProcsToDuplicate: ~p~n", [StorageProcsToDuplicate]),
 				lists:map(fun(X) -> global:send(X, RequestDupsMsg) end, StorageProcsToDuplicate);
 			{Pid, sendDuplicateTable, Table, DestinationNodeNum, StorageID} ->
 				% Received by first node from storage process, must forward this table
 				% onto the second node to make a duplicate.
 				DestinationNode = lists:concat(["Node", integer_to_list(DestinationNodeNum)]),
-				global:send(DestinationNode, {self(), makeDuplicate, Table, StorageID});
+				global:send(DestinationNode, {self(), makeDuplicate, Table, StorageID}); % TODO should use send_node_message
+			{Pid, leave} -> % Sent from our storage process by the outside world to leave
+				exit("We were told to leave.");
+			{nodedown, Node} ->
+				global:sync(),
+				% Use the difference between the original global table and this new one
+				% to determine which node (by our registry naming scheme) has left.
+				% We can use this to see if we care (i.e. if it's a successor or
+				% predecessor).
+				OrigGlobalTableSet = ordsets:from_list(OrigGlobalTable),
+				NewGlobalTable = lists:sort(global:registered_names()),
+				NewGlobalTableSet = ordsets:from_list(NewGlobalTable),
+				LeftNodeName = lists:nth(1, ordsets:subtract(OrigGlobalTableSet, NewGlobalTableSet)), % there should only be one in the difference anyways
+				{LeftNodeNum, _} = string:to_integer(string:sub_string(LeftNodeName, 5)), % we know it is "NodeINT"; strip out NODE then parse as int
+				io:format("The node that left is: ~p~n", [LeftNodeName]),
+				io:format("Updated global table is: ~p~n", [NewGlobalTable]),
+				io:format("Parsed NodeNum to be: ~p~n", [LeftNodeNum]),
+
+				NodesInNetworkList = find_all_nodes(0, [], NumStorageProcesses-1),
+				PredecessorNodeNum = get_previous_node(CurrentNodeID, NodesInNetworkList), % These are after updating global table
+				SuccessorNodeNum = get_next_node(CurrentNodeID, NodesInNetworkList);	   % We have to see if the guy that left fell between them
+				% case is_between(CurrentNodeID, SuccessorNodeNum, LeftNodeNum, NumStorageProcesses-1) of
+				% 	true -> % if less than new successor and
+				% 			% greater than current, he must
+				% 			% have been our old successor
+				% 		% make our duplicates official. These are values between the old successor and the new.
+				% 		DupStorageProcessNums = calc_storage_processes(LeftNodeNum, SuccessorNodeNum, NumStorageProcesses-1),
+				% 		% are all of these necessarily duplicates?
+				% 		DupStorageProcessNames = lists:map(fun(X) -> lists:concat(["StorageDuplicate", integer_to_list(X)]) end, DupStorageProcessNums),
+				% 		lists:map(fun(X) -> global:send(X, {self(), makeOfficial}) end, DupStorageProcessNames), 
+
+				% 		StorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, DupStorageProcessNums),
+				% 		% Then send these on to our predecessor to be duplitized.
+				% 		PredecessorNode = lists:concat(["Node", integer_to_list(PredecessorNodeNum)]),
+				% 		lists:map(fun(X) -> global:send(X, {self(), requestDuplicates, PredecessorNodeNum, CurrentNodeID}) end, StorageProcessNames);
+				% 		% global:send(PredecessorNode, {self(), requestDuplicates, CurrentNodeID}); % TODO get duplicates from our new successor
+				% 		%lists:map(fun(X) -> global:send(X, {self(), requestDuplicates, SuccessorNodeNum, CurrentNodeID}) end, StorageProcessNames);
+				% 	false ->
+				% 		true % Not our successor, we don't care.
+				% end,
+				% case is_between(PredecessorNodeNum, CurrentNodeID, LeftNodeNum, NumStorageProcesses-1) of
+				%   	true -> % by same logic, must've been old predecessor
+				% 		% send new predecessor all our official storage processes to duplicate.
+				% 		CurrentStorageProcessNums = calc_storage_processes(CurrentNodeID, SuccessorNodeNum, NumStorageProcesses-1),
+				% 		CurrentStorageProcessNames = lists:map(fun(X) -> lists:concat(["Storage", integer_to_list(X)]) end, CurrentStorageProcessNums),
+				% 		lists:map(fun(X) -> global:send(X, {self(), requestDuplicates, PredecessorNodeNum, CurrentNodeID}) end, CurrentStorageProcessNames);
+				% 	false -> % Not our predecessor, we don't care.
+				% 		true
+				% end;
+			{nodeup, Node} ->
+				io:format("Node ~p has been added to the network ~n", [Node]);
 			Message -> 
 				io:format("Received some malformed message ~p~n", [Message])
 		end,
 		process_messages(NumStorageProcesses, CurrentNodeID).
+
+
+% Sees if NodeNum is between the LowerBoundNum and UpperBoundNum, taking into account the
+% ring structure. 
+is_between(LowerBoundNum, UpperBoundNum, NodeNum, NumStorageProcesses) ->
+	% generate a list of all numbers between lower and upper bound. (i.e. by incrementing/wrapping around)
+	% Then see if NodeNum is in that list
+	ListNumbers = calc_storage_processes(LowerBoundNum, UpperBoundNum, NumStorageProcesses),
+	lists:member(NodeNum, ListNumbers).
+
 
 % process_storage_reply_messages(OldPid, OldRef) ->
 % 	receive
@@ -480,17 +550,17 @@ process_messages(NumStorageProcesses, CurrentNodeID) ->
 % 	end.
 
 % Spawn tables and their duplicates, and register both appropriately.
-spawn_tables(NumTables) ->
+spawn_tables(NumTables, NumStorageProcesses) ->
 	if NumTables < 0
 		-> true;
 		true ->
-			SpawnPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables]), 
-			SpawnDupPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables]),
+			SpawnPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables, NumStorageProcesses]), 
+			SpawnDupPID = spawn(key_value_node, storage_process, [ets:new(storage_table, []), NumTables, NumStorageProcesses]),
 			SpawnName = lists:concat(["Storage", integer_to_list(NumTables)]),
 			SpawnDupName = lists:concat(["StorageDuplicate", integer_to_list(NumTables)]), % register all duplicates on same node at first.
 			register(list_to_atom(SpawnName), SpawnPID), % registers it locally with the node-- so we can access it after it's globally deregistered
 			global:sync(),
 			global:register_name(SpawnName, SpawnPID), % and globally
 			global:register_name(SpawnDupName, SpawnDupPID),
-			spawn_tables(NumTables-1)
+			spawn_tables(NumTables-1, NumStorageProcesses)
 	end.
